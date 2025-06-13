@@ -100,4 +100,4 @@ jobs:
               -e WG_CA_CERT=/etc/lime-bot/ca.pem \
               -e HEALTH_ADDR=0.0.0.0:8080 \
               $DOCKERHUB_USERNAME/lime-bot:latest
-EOF
+          EOF
