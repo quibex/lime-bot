@@ -1,0 +1,93 @@
+name: Build and Deploy lime-bot
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'scripts/health_checker.sh'
+      - '.github/workflows/script-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual deployment'
+        required: false
+        default: 'Manual full deployment'
+
+jobs:
+  build-and-push:
+    name: Build Docker Image and Push to Docker Hub
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/lime-bot:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/lime-bot:${{ github.sha }}
+
+  deploy-to-server:
+    name: Deploy to Production Server
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+      - name: Generate client certificate from CA
+        env:
+          CA_CERT_PEM: ${{ secrets.CA_CERT_PEM }}
+          CA_KEY_PEM: ${{ secrets.CA_KEY_PEM }}
+        run: |
+          scp scripts/make-client-cert.sh scripts/make-ca-only.sh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << EOF
+            chmod +x /tmp/make-client-cert.sh /tmp/make-ca-only.sh
+            export CA_CERT_PEM="$CA_CERT_PEM"
+            export CA_KEY_PEM="$CA_KEY_PEM"
+            /tmp/make-client-cert.sh
+            rm -f /tmp/make-client-cert.sh /tmp/make-ca-only.sh
+          EOF
+      - name: Deploy container
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          SUPER_ADMIN_ID: ${{ secrets.SUPER_ADMIN_ID }}
+          REVIEWS_CHANNEL_ID: ${{ secrets.REVIEWS_CHANNEL_ID }}
+          DB_DSN: ${{ secrets.DB_DSN }}
+          WG_AGENT_ADDR: ${{ secrets.WG_AGENT_ADDR }}
+        run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << EOF
+            sudo mkdir -p /opt/lime-bot
+            cd /opt/lime-bot
+            docker rm -f lime-bot-container || true
+            docker pull $DOCKERHUB_USERNAME/lime-bot:latest
+            docker run -d \
+              --name lime-bot-container \
+              --restart unless-stopped \
+              --network host \
+              -v /etc/lime-bot:/etc/lime-bot:ro \
+              -e BOT_TOKEN=$BOT_TOKEN \
+              -e SUPER_ADMIN_ID=$SUPER_ADMIN_ID \
+              -e REVIEWS_CHANNEL_ID=$REVIEWS_CHANNEL_ID \
+              -e DB_DSN=$DB_DSN \
+              -e WG_AGENT_ADDR=$WG_AGENT_ADDR \
+              $DOCKERHUB_USERNAME/lime-bot:latest
+          EOF 

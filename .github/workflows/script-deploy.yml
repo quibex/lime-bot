@@ -1,0 +1,61 @@
+name: Deploy Health Checker Script
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/health_checker.sh'
+      - '.github/workflows/script-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual deployment'
+        required: false
+        default: 'Manual script deployment'
+
+jobs:
+  deploy-script:
+    name: Deploy Health Checker Script Only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+      - name: Deploy health checker script
+        run: |
+          echo "🚀 Deploying health checker script..."
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "📝 Manual deployment reason: ${{ inputs.reason }}"
+          else
+            echo "📝 Triggered by push to scripts/health_checker.sh"
+          fi
+          echo "📤 Uploading script to server..."
+          scp scripts/health_checker.sh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/lime-bot/
+          echo "⚙️ Setting up cron job..."
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            chmod +x /opt/lime-bot/health_checker.sh
+            crontab -l 2>/dev/null | grep -v health_checker > temp_cron || true
+            echo "* * * * * . /etc/environment; /opt/lime-bot/health_checker.sh" >> temp_cron
+            crontab temp_cron
+            rm -f temp_cron
+            echo "✅ Health checker script deployed successfully!"
+            echo "📅 Cron job set to run every minute (with lock protection)"
+          EOF
+      - name: Verify deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+            echo '📄 Script file:' && 
+            ls -la /opt/lime-bot/health_checker.sh && 
+            echo '' && 
+            echo '📅 Active cron jobs:' && 
+            (crontab -l | grep health_checker || echo '❌ No health checker cron job found')
+          " 
