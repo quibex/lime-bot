@@ -71,23 +71,28 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           SUPER_ADMIN_ID: ${{ secrets.SUPER_ADMIN_ID }}
           REVIEWS_CHANNEL_ID: ${{ secrets.REVIEWS_CHANNEL_ID }}
-          DB_DSN: ${{ secrets.DB_DSN }}
+          DB_DSN: ${{ secrets.DB_DSN || 'file://data/limevpn.db' }}
           WG_AGENT_ADDR: ${{ secrets.WG_AGENT_ADDR }}
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << EOF
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
             sudo mkdir -p /opt/lime-bot
+            sudo mkdir -p /data
             cd /opt/lime-bot
             docker rm -f lime-bot-container || true
-            docker pull $DOCKERHUB_USERNAME/lime-bot:latest
+            docker pull ${DOCKERHUB_USERNAME}/lime-bot:latest
             docker run -d \
               --name lime-bot-container \
               --restart unless-stopped \
               --network host \
               -v /etc/lime-bot:/etc/lime-bot:ro \
-              -e BOT_TOKEN=$BOT_TOKEN \
-              -e SUPER_ADMIN_ID=$SUPER_ADMIN_ID \
-              -e REVIEWS_CHANNEL_ID=$REVIEWS_CHANNEL_ID \
-              -e DB_DSN=$DB_DSN \
-              -e WG_AGENT_ADDR=$WG_AGENT_ADDR \
-              $DOCKERHUB_USERNAME/lime-bot:latest
+              -v /data:/data \
+              -e BOT_TOKEN="${BOT_TOKEN}" \
+              -e SUPER_ADMIN_ID="${SUPER_ADMIN_ID}" \
+              -e REVIEWS_CHANNEL_ID="${REVIEWS_CHANNEL_ID}" \
+              -e DB_DSN="${DB_DSN}" \
+              -e WG_AGENT_ADDR="${WG_AGENT_ADDR}" \
+              -e WG_CLIENT_CERT="/etc/lime-bot/client.pem" \
+              -e WG_CLIENT_KEY="/etc/lime-bot/client-key.pem" \
+              -e WG_CA_CERT="/etc/lime-bot/ca.pem" \
+              ${DOCKERHUB_USERNAME}/lime-bot:latest
           EOF 
