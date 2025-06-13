@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Health checker for wg-agent service
+# Health checker for lime-bot service
 # Sends/updates status messages to your personal Telegram account
-# Required environment variables: TG_TOKEN, TG_CHAT_ID
+# Required environment variables: ALERT_BOT_TOKEN, ALERT_CHAT_ID
 
-SERVICE_NAME="wg-agent"
+SERVICE_NAME="lime-bot"
 HEALTH_URL="http://localhost:8080/health"
-OK_MESSAGE_ID_FILE="/tmp/wg-agent-ok-message-id"
-FAIL_MESSAGE_ID_FILE="/tmp/wg-agent-fail-message-id"
-FAIL_START_TIME_FILE="/tmp/wg-agent-fail-start-time"
-LOCK_FILE="/tmp/wg-agent-health-check.lock"
+OK_MESSAGE_ID_FILE="/tmp/lime-bot-ok-message-id"
+FAIL_MESSAGE_ID_FILE="/tmp/lime-bot-fail-message-id"
+FAIL_START_TIME_FILE="/tmp/lime-bot-fail-start-time"
+LOCK_FILE="/tmp/lime-bot-health-check.lock"
 HOSTNAME=$(hostname)
 
 # Cleanup function
@@ -39,9 +39,9 @@ echo $$ > "$LOCK_FILE"
 send_message() {
     local message="$1"
     local save_to_file="$2"
-    if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-        response=$(curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-                        -d "chat_id=$TG_CHAT_ID" \
+    if [ -n "$ALERT_BOT_TOKEN" ] && [ -n "$ALERT_CHAT_ID" ]; then
+        response=$(curl -s -X POST "https://api.telegram.org/bot$ALERT_BOT_TOKEN/sendMessage" \
+                        -d "chat_id=$ALERT_CHAT_ID" \
                         -d "text=$message" \
                         -d "parse_mode=HTML")
         
@@ -56,9 +56,9 @@ send_message() {
 edit_message() {
     local message="$1"
     local message_id="$2"
-    if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT_ID" ] && [ -n "$message_id" ]; then
-        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/editMessageText" \
-             -d "chat_id=$TG_CHAT_ID" \
+    if [ -n "$ALERT_BOT_TOKEN" ] && [ -n "$ALERT_CHAT_ID" ] && [ -n "$message_id" ]; then
+        curl -s -X POST "https://api.telegram.org/bot$ALERT_BOT_TOKEN/editMessageText" \
+             -d "chat_id=$ALERT_CHAT_ID" \
              -d "message_id=$message_id" \
              -d "text=$message" \
              -d "parse_mode=HTML" > /dev/null 2>&1

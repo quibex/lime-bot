@@ -9,33 +9,33 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Настройка тестовой среды
+	
 	os.Exit(m.Run())
 }
 
 func setupTestService(t *testing.T) (*Service, *db.Repository) {
-	// Создаем тестовую конфигурацию
+	
 	cfg := &config.Config{
 		BotToken:     "test_token",
 		WGAgentAddr:  "localhost:8080",
 		SuperAdminID: "123456789",
 	}
 
-	// Создаем тестовую БД в памяти
+	
 	repo, err := db.NewRepository(":memory:")
 	if err != nil {
 		t.Fatalf("failed to create test repository: %v", err)
 	}
 
-	// Автомиграция для тестов
+	
 	if err := repo.AutoMigrate(); err != nil {
 		t.Fatalf("failed to migrate test database: %v", err)
 	}
 
-	// Создаем тестовые данные
+	
 	setupTestData(t, repo)
 
-	// Создаем сервис (без реального бота)
+	
 	service := &Service{
 		repo: repo,
 		cfg:  cfg,
@@ -45,7 +45,7 @@ func setupTestService(t *testing.T) (*Service, *db.Repository) {
 }
 
 func setupTestData(t *testing.T, repo *db.Repository) {
-	// Создаем тестовые тарифы
+	
 	plans := []db.Plan{
 		{Name: "Тест 1 месяц", PriceInt: 200, DurationDays: 30},
 		{Name: "Тест 3 месяца", PriceInt: 500, DurationDays: 90},
@@ -56,7 +56,7 @@ func setupTestData(t *testing.T, repo *db.Repository) {
 		repo.DB().Create(&plan)
 	}
 
-	// Создаем тестовые способы оплаты
+	
 	methods := []db.PaymentMethod{
 		{Bank: "Сбербанк", PhoneNumber: "+79001234567"},
 		{Bank: "Тинькофф", PhoneNumber: "+79007654321"},
@@ -67,7 +67,7 @@ func setupTestData(t *testing.T, repo *db.Repository) {
 		repo.DB().Create(&method)
 	}
 
-	// Создаем тестового пользователя
+	
 	user := db.User{
 		TgID:     123456789,
 		Username: "testuser",
@@ -75,7 +75,7 @@ func setupTestData(t *testing.T, repo *db.Repository) {
 	}
 	repo.DB().Create(&user)
 
-	// Создаем тестового админа
+	
 	admin := db.Admin{
 		TgID: 123456789,
 		Role: "super",
@@ -127,13 +127,13 @@ func TestGenerateRefCode(t *testing.T) {
 		t.Errorf("generateRefCode returned code longer than 12 chars: %s", code)
 	}
 
-	// Проверяем, что код содержит ID пользователя
+	
 	if len(code) < 8 {
 		t.Errorf("generateRefCode returned suspiciously short code: %s", code)
 	}
 }
 
-// Тест для функции проверки префикса
+
 func TestStartsWith(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -193,13 +193,13 @@ func TestBotError(t *testing.T) {
 		t.Error("Error() returned empty string")
 	}
 
-	// Проверяем, что строка ошибки содержит код
+	
 	if len(errorString) < 10 {
 		t.Errorf("Error() returned suspiciously short string: %s", errorString)
 	}
 }
 
-// Тест создания ошибок через вспомогательные функции
+
 func TestErrorHelpers(t *testing.T) {
 	tests := []struct {
 		name     string

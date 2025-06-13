@@ -20,7 +20,7 @@ func (s *Service) handleAddPaymentMethod(msg *tgbotapi.Message) {
 	bank := args[1]
 	ownerName := strings.Join(args[2:], " ")
 
-	// Убираем кавычки если есть
+	
 	ownerName = strings.Trim(ownerName, "\"")
 
 	method := &db.PaymentMethod{
@@ -73,7 +73,7 @@ func (s *Service) handleArchivePaymentMethod(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Создаем inline клавиатуру
+	
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 	for _, method := range methods {
 		btn := tgbotapi.NewInlineKeyboardButtonData(

@@ -38,7 +38,7 @@ func (s *Service) handleMyKeys(msg *tgbotapi.Message) {
 			sub.EndDate.Format("02.01.2006"), status)
 	}
 
-	// Создаем inline клавиатуру для каждой подписки
+	
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 	for _, sub := range subscriptions {
 		buttonRow := []tgbotapi.InlineKeyboardButton{
@@ -75,7 +75,7 @@ func (s *Service) handleDisable(msg *tgbotapi.Message) {
 
 	username := args[0]
 
-	// Ищем пользователя
+	
 	var user db.User
 	result := s.repo.DB().Where("username LIKE ?", "%"+username+"%").First(&user)
 	if result.Error != nil {
@@ -83,7 +83,7 @@ func (s *Service) handleDisable(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Получаем активные подписки пользователя
+	
 	var subscriptions []db.Subscription
 	result = s.repo.DB().Where("user_id = ? AND active = true", user.TgID).Find(&subscriptions)
 	if result.Error != nil {
@@ -96,7 +96,7 @@ func (s *Service) handleDisable(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Отключаем все подписки пользователя
+	
 	disabled := 0
 	for _, sub := range subscriptions {
 		err := s.disablePeer(sub.Interface, sub.PublicKey)
@@ -104,7 +104,7 @@ func (s *Service) handleDisable(msg *tgbotapi.Message) {
 			continue
 		}
 
-		// Обновляем в БД
+		
 		s.repo.DB().Model(&sub).Update("active", false)
 		disabled++
 	}
@@ -126,7 +126,7 @@ func (s *Service) handleEnable(msg *tgbotapi.Message) {
 
 	username := args[0]
 
-	// Ищем пользователя
+	
 	var user db.User
 	result := s.repo.DB().Where("username LIKE ?", "%"+username+"%").First(&user)
 	if result.Error != nil {
@@ -134,7 +134,7 @@ func (s *Service) handleEnable(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Получаем неактивные подписки пользователя (но не истекшие)
+	
 	var subscriptions []db.Subscription
 	result = s.repo.DB().Where("user_id = ? AND active = false AND end_date > NOW()", user.TgID).Find(&subscriptions)
 	if result.Error != nil {
@@ -147,7 +147,7 @@ func (s *Service) handleEnable(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Включаем все неактивные подписки пользователя
+	
 	enabled := 0
 	for _, sub := range subscriptions {
 		err := s.enablePeer(sub.Interface, sub.PublicKey)
@@ -155,7 +155,7 @@ func (s *Service) handleEnable(msg *tgbotapi.Message) {
 			continue
 		}
 
-		// Обновляем в БД
+		
 		s.repo.DB().Model(&sub).Update("active", true)
 		enabled++
 	}
@@ -180,7 +180,7 @@ func (s *Service) handleSubscriptionCallback(callback *tgbotapi.CallbackQuery) {
 }
 
 func (s *Service) sendConfigForPeer(callback *tgbotapi.CallbackQuery, peerID string) {
-	// Проверяем права доступа
+	
 	var subscription db.Subscription
 	result := s.repo.DB().Where("peer_id = ? AND user_id = ?", peerID, callback.From.ID).First(&subscription)
 	if result.Error != nil {
@@ -188,7 +188,7 @@ func (s *Service) sendConfigForPeer(callback *tgbotapi.CallbackQuery, peerID str
 		return
 	}
 
-	// TODO: Получить настоящую конфигурацию из wg-agent
+	
 	config := fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s
@@ -200,7 +200,7 @@ Endpoint = vpn.example.com:51820
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25`, subscription.PrivKeyEnc, subscription.AllowedIP)
 
-	// Отправляем конфигурацию как файл
+	
 	configBytes := []byte(config)
 	fileName := fmt.Sprintf("%s.conf", subscription.Platform)
 
@@ -217,7 +217,7 @@ PersistentKeepalive = 25`, subscription.PrivKeyEnc, subscription.AllowedIP)
 }
 
 func (s *Service) sendQRForPeer(callback *tgbotapi.CallbackQuery, peerID string) {
-	// Проверяем права доступа
+	
 	var subscription db.Subscription
 	result := s.repo.DB().Where("peer_id = ? AND user_id = ?", peerID, callback.From.ID).First(&subscription)
 	if result.Error != nil {
@@ -225,7 +225,7 @@ func (s *Service) sendQRForPeer(callback *tgbotapi.CallbackQuery, peerID string)
 		return
 	}
 
-	// TODO: Получить настоящий QR код из wg-agent
+	
 	s.reply(callback.Message.Chat.ID, "📷 QR код пока не реализован")
 	s.answerCallback(callback.ID, "")
 }

@@ -20,13 +20,13 @@ type BuyState struct {
 	Platform string
 	Qty      int
 	MethodID uint
-	Step     string // "plan", "platform", "qty", "method", "payment"
+	Step     string 
 }
 
 var buyStates = make(map[int64]*BuyState)
 
 func (s *Service) handleBuy(msg *tgbotapi.Message) {
-	// Начинаем процесс покупки - выбор тарифа
+	
 	var plans []db.Plan
 	result := s.repo.DB().Where("archived = false").Find(&plans)
 	if result.Error != nil {
@@ -39,7 +39,7 @@ func (s *Service) handleBuy(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Создаем inline клавиатуру с тарифами
+	
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 	for _, plan := range plans {
 		btn := tgbotapi.NewInlineKeyboardButtonData(
@@ -49,7 +49,7 @@ func (s *Service) handleBuy(msg *tgbotapi.Message) {
 		keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{btn})
 	}
 
-	// Сохраняем состояние
+	
 	buyStates[msg.From.ID] = &BuyState{
 		UserID: msg.From.ID,
 		Step:   "plan",
@@ -92,7 +92,7 @@ func (s *Service) handlePlanSelection(callback *tgbotapi.CallbackQuery, state *B
 	state.PlanID = uint(planID)
 	state.Step = "platform"
 
-	// Выбор платформы
+	
 	keyboard := [][]tgbotapi.InlineKeyboardButton{
 		{tgbotapi.NewInlineKeyboardButtonData("📱 Android", "buy_platform_android")},
 		{tgbotapi.NewInlineKeyboardButtonData("🍎 iOS", "buy_platform_ios")},
@@ -116,7 +116,7 @@ func (s *Service) handlePlatformSelection(callback *tgbotapi.CallbackQuery, stat
 	state.Platform = platform
 	state.Step = "qty"
 
-	// Выбор количества
+	
 	keyboard := [][]tgbotapi.InlineKeyboardButton{
 		{tgbotapi.NewInlineKeyboardButtonData("1 ключ", "buy_qty_1")},
 		{tgbotapi.NewInlineKeyboardButtonData("2 ключа", "buy_qty_2")},
@@ -145,7 +145,7 @@ func (s *Service) handleQtySelection(callback *tgbotapi.CallbackQuery, state *Bu
 	state.Qty = qty
 	state.Step = "method"
 
-	// Получаем способы оплаты
+	
 	var methods []db.PaymentMethod
 	result := s.repo.DB().Where("archived = false").Find(&methods)
 	if result.Error != nil {
@@ -158,7 +158,7 @@ func (s *Service) handleQtySelection(callback *tgbotapi.CallbackQuery, state *Bu
 		return
 	}
 
-	// Создаем клавиатуру с методами
+	
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 	for _, method := range methods {
 		btn := tgbotapi.NewInlineKeyboardButtonData(
@@ -188,20 +188,20 @@ func (s *Service) handleMethodSelection(callback *tgbotapi.CallbackQuery, state 
 
 	state.MethodID = uint(methodID)
 
-	// Создаем платеж и подписки
+	
 	err = s.processPurchase(callback, state)
 	if err != nil {
 		s.answerCallback(callback.ID, fmt.Sprintf("Ошибка обработки покупки: %v", err))
 		return
 	}
 
-	// Очищаем состояние
+	
 	delete(buyStates, state.UserID)
 	s.answerCallback(callback.ID, "Покупка обработана!")
 }
 
 func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuyState) error {
-	// Начинаем транзакцию
+	
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -212,21 +212,21 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 		}
 	}()
 
-	// Получаем тариф
+	
 	var plan db.Plan
 	if err := tx.First(&plan, state.PlanID).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	// Получаем метод оплаты
+	
 	var method db.PaymentMethod
 	if err := tx.First(&method, state.MethodID).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	// Создаем платеж
+	
 	totalAmount := plan.PriceInt * state.Qty
 	payment := &db.Payment{
 		UserID:   state.UserID,
@@ -242,7 +242,7 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 		return err
 	}
 
-	// Создаем подписки (ключи сразу)
+	
 	for i := 0; i < state.Qty; i++ {
 		subscription, err := s.createSubscription(tx, state, &plan, payment.ID)
 		if err != nil {
@@ -250,23 +250,23 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 			return err
 		}
 
-		// Отправляем ключ пользователю
+		
 		s.sendSubscriptionToUser(callback.Message.Chat.ID, subscription)
 	}
 
-	// Коммитим транзакцию
+	
 	if err := tx.Commit().Error; err != nil {
 		return err
 	}
 
-	// Отправляем информацию о платеже
+	
 	s.sendPaymentInfo(callback.Message.Chat.ID, payment, &method, &plan)
 
 	return nil
 }
 
 func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan, paymentID uint) (*db.Subscription, error) {
-	// Генерируем peer config через wg-agent
+	
 	ctx := context.Background()
 
 	wgConfig := wgagent.Config{
@@ -278,7 +278,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 	}
 	defer wgClient.Close()
 
-	// Генерируем конфигурацию
+	
 	peerReq := &wgagent.GeneratePeerConfigRequest{
 		Interface:      "wg0",
 		ServerEndpoint: "vpn.example.com:51820",
@@ -291,7 +291,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 		return nil, err
 	}
 
-	// Добавляем peer
+	
 	peerID := fmt.Sprintf("user_%d_%d", state.UserID, time.Now().Unix())
 	addReq := &wgagent.AddPeerRequest{
 		Interface:  "wg0",
@@ -306,7 +306,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 		return nil, err
 	}
 
-	// Создаем подписку в БД
+	
 	startDate := time.Now()
 	endDate := startDate.AddDate(0, 0, plan.DurationDays)
 
@@ -314,7 +314,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 		UserID:     state.UserID,
 		PlanID:     state.PlanID,
 		PeerID:     peerID,
-		PrivKeyEnc: peerResp.PrivateKey, // TODO: зашифровать
+		PrivKeyEnc: peerResp.PrivateKey, 
 		PublicKey:  peerResp.PublicKey,
 		Interface:  "wg0",
 		AllowedIP:  peerResp.AllowedIP,
@@ -347,7 +347,7 @@ func (s *Service) sendSubscriptionToUser(chatID int64, subscription *db.Subscrip
 
 	s.reply(chatID, text)
 
-	// TODO: отправить QR код и конфигурацию
+	
 	s.reply(chatID, "Конфигурация: mock_config_data")
 }
 

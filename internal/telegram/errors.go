@@ -8,7 +8,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// Error коды для различных типов ошибок
+
 const (
 	ErrInvalidInput      = "INVALID_INPUT"
 	ErrDatabaseError     = "DATABASE_ERROR"
@@ -20,7 +20,7 @@ const (
 	ErrSubscriptionError = "SUBSCRIPTION_ERROR"
 )
 
-// BotError представляет ошибку бота с кодом и сообщением для пользователя
+
 type BotError struct {
 	Code        string
 	Message     string
@@ -32,7 +32,7 @@ func (e *BotError) Error() string {
 	return fmt.Sprintf("[%s] %s: %s", e.Code, e.Message, e.Details)
 }
 
-// NewBotError создает новую ошибку бота
+
 func NewBotError(code, message, userMessage, details string) *BotError {
 	return &BotError{
 		Code:        code,
@@ -42,23 +42,23 @@ func NewBotError(code, message, userMessage, details string) *BotError {
 	}
 }
 
-// handleError обрабатывает ошибки и отправляет соответствующие сообщения пользователю
+
 func (s *Service) handleError(chatID int64, err error) {
 	slog.Error("Bot error occurred", "error", err)
 
 	var userMessage string
 
-	// Проверяем, является ли ошибка нашей BotError
+	
 	if botErr, ok := err.(*BotError); ok {
 		userMessage = botErr.UserMessage
 
-		// Отправляем детали ошибки супер-админу
+		
 		s.sendErrorReport(botErr)
 	} else {
-		// Общая ошибка
+		
 		userMessage = "Произошла внутренняя ошибка. Попробуйте позже."
 
-		// Отправляем отчет об ошибке
+		
 		s.sendErrorReport(&BotError{
 			Code:        "UNKNOWN_ERROR",
 			Message:     "Unknown error occurred",
@@ -67,11 +67,11 @@ func (s *Service) handleError(chatID int64, err error) {
 		})
 	}
 
-	// Отправляем сообщение пользователю
+	
 	s.reply(chatID, "❌ "+userMessage)
 }
 
-// sendErrorReport отправляет отчет об ошибке супер-админу
+
 func (s *Service) sendErrorReport(botErr *BotError) {
 	if s.cfg.SuperAdminID == "" {
 		return
@@ -99,7 +99,7 @@ func (s *Service) sendErrorReport(botErr *BotError) {
 	s.bot.Send(msg)
 }
 
-// Вспомогательные функции для создания типичных ошибок
+
 
 func ErrInvalidInputf(details string, args ...interface{}) *BotError {
 	return NewBotError(

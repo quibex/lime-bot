@@ -17,7 +17,7 @@ func (s *Service) handleAdmins(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Создаем inline клавиатуру для управления админами
+	
 	keyboard := [][]tgbotapi.InlineKeyboardButton{
 		{tgbotapi.NewInlineKeyboardButtonData("➕ Добавить админа", "admin_add")},
 		{tgbotapi.NewInlineKeyboardButtonData("📋 Список админов", "admin_list")},
@@ -36,7 +36,7 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Получаем платежи в статусе pending
+	
 	var payments []db.Payment
 	result := s.repo.DB().Where("status = 'pending'").
 		Preload("User").
@@ -70,7 +70,7 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 			payment.CreatedAt.Format("02.01.2006 15:04"),
 		)
 
-		// Добавляем кнопки для каждого платежа
+		
 		buttonRow := []tgbotapi.InlineKeyboardButton{
 			tgbotapi.NewInlineKeyboardButtonData(
 				fmt.Sprintf("✅ #%d", payment.ID),
@@ -83,7 +83,7 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 		}
 		keyboard = append(keyboard, buttonRow)
 
-		// Ограничиваем количество платежей в одном сообщении
+		
 		if i >= 4 {
 			text += "...и еще платежи\n"
 			break
@@ -111,7 +111,7 @@ func (s *Service) handleInfo(msg *tgbotapi.Message) {
 
 	username := args[0]
 
-	// Ищем пользователей (fuzzy поиск)
+	
 	var users []db.User
 	result := s.repo.DB().Where("username LIKE ?", "%"+username+"%").Limit(5).Find(&users)
 	if result.Error != nil {
@@ -125,7 +125,7 @@ func (s *Service) handleInfo(msg *tgbotapi.Message) {
 	}
 
 	if len(users) > 1 {
-		// Показываем список найденных пользователей
+		
 		text := "Найдено несколько пользователей:\n\n"
 		var keyboard [][]tgbotapi.InlineKeyboardButton
 
@@ -144,12 +144,12 @@ func (s *Service) handleInfo(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Показываем информацию о единственном найденном пользователе
+	
 	s.sendUserInfo(msg.Chat.ID, users[0].TgID)
 }
 
 func (s *Service) sendUserInfo(chatID int64, userID int64) {
-	// Получаем информацию о пользователе
+	
 	var user db.User
 	result := s.repo.DB().First(&user, "tg_id = ?", userID)
 	if result.Error != nil {
@@ -157,14 +157,14 @@ func (s *Service) sendUserInfo(chatID int64, userID int64) {
 		return
 	}
 
-	// Получаем подписки
+	
 	var subscriptions []db.Subscription
 	s.repo.DB().Where("user_id = ?", userID).
 		Preload("Plan").
 		Order("end_date DESC").
 		Find(&subscriptions)
 
-	// Получаем платежи
+	
 	var payments []db.Payment
 	s.repo.DB().Where("user_id = ?", userID).
 		Preload("Plan").
@@ -190,7 +190,7 @@ func (s *Service) sendUserInfo(chatID int64, userID int64) {
 		len(subscriptions),
 	)
 
-	// Добавляем информацию о подписках
+	
 	for _, sub := range subscriptions {
 		status := "🟢"
 		if !sub.Active {
@@ -206,7 +206,7 @@ func (s *Service) sendUserInfo(chatID int64, userID int64) {
 
 	text += fmt.Sprintf("\n\n💳 Последние платежи (%d):", len(payments))
 
-	// Добавляем информацию о платежах
+	
 	for _, payment := range payments {
 		statusEmoji := "⏳"
 		switch payment.Status {
@@ -244,7 +244,7 @@ func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 			return
 		}
 
-		// Отправляем информацию о пользователе
+		
 		s.sendUserInfo(callback.Message.Chat.ID, userID)
 		s.answerCallback(callback.ID, "")
 		return
@@ -258,13 +258,13 @@ func (s *Service) handleAdminManagementCallback(callback *tgbotapi.CallbackQuery
 	case "admin_list":
 		s.showAdminList(callback)
 	case "admin_add":
-		// TODO: реализовать добавление админа через состояние
+		
 		s.answerCallback(callback.ID, "Функция в разработке")
 	case "admin_disable":
-		// TODO: реализовать отключение админа
+		
 		s.answerCallback(callback.ID, "Функция в разработке")
 	case "admin_cashier":
-		// TODO: реализовать назначение кассира
+		
 		s.answerCallback(callback.ID, "Функция в разработке")
 	}
 }
@@ -323,7 +323,7 @@ func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 
 		s.answerCallback(callback.ID, "✅ Платеж одобрен")
 
-		// Обновляем сообщение
+		
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -349,7 +349,7 @@ func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 
 		s.answerCallback(callback.ID, "❌ Платеж отклонен")
 
-		// Обновляем сообщение
+		
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -361,7 +361,7 @@ func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 }
 
 func (s *Service) approvePayment(paymentID uint, adminID int64) error {
-	// Начинаем транзакцию
+	
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -372,7 +372,7 @@ func (s *Service) approvePayment(paymentID uint, adminID int64) error {
 		}
 	}()
 
-	// Обновляем статус платежа
+	
 	result := tx.Model(&db.Payment{}).
 		Where("id = ? AND status = 'pending'", paymentID).
 		Updates(map[string]interface{}{
@@ -390,14 +390,14 @@ func (s *Service) approvePayment(paymentID uint, adminID int64) error {
 		return fmt.Errorf("платеж не найден или уже обработан")
 	}
 
-	// Подписки уже были созданы при покупке, просто активируем их
-	// (в нашей реализации они уже активны)
+	
+	
 
 	return tx.Commit().Error
 }
 
 func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
-	// Начинаем транзакцию
+	
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -408,7 +408,7 @@ func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
 		}
 	}()
 
-	// Получаем платеж
+	
 	var payment db.Payment
 	if err := tx.First(&payment, paymentID).Error; err != nil {
 		tx.Rollback()
@@ -420,7 +420,7 @@ func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
 		return fmt.Errorf("платеж уже обработан")
 	}
 
-	// Обновляем статус платежа
+	
 	payment.Status = "rejected"
 	payment.ApprovedBy = &adminID
 
@@ -429,15 +429,15 @@ func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
 		return err
 	}
 
-	// Отключаем все связанные подписки
+	
 	var subscriptions []db.Subscription
 	tx.Where("payment_id = ?", paymentID).Find(&subscriptions)
 
 	for _, sub := range subscriptions {
-		// Отключаем в wg-agent
+		
 		s.disablePeer(sub.Interface, sub.PublicKey)
 
-		// Деактивируем в БД
+		
 		tx.Model(&sub).Update("active", false)
 	}
 

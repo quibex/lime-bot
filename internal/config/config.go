@@ -3,21 +3,19 @@ package config
 import "os"
 
 type Config struct {
-	// Telegram
 	BotToken         string
 	SuperAdminID     string
 	ReviewsChannelID string
 
-	// БД
 	DBDsn string
 
-	// wg-agent gRPC
 	WGAgentAddr  string
 	WGClientCert string
 	WGClientKey  string
 	WGCACert     string
 
-	// Health-check
+	HealthAddr string
+
 	TGToken  string
 	TGChatID string
 }
@@ -34,6 +32,8 @@ func Load() *Config {
 		WGClientCert: os.Getenv("WG_CLIENT_CERT"),
 		WGClientKey:  os.Getenv("WG_CLIENT_KEY"),
 		WGCACert:     os.Getenv("WG_CA_CERT"),
+
+		HealthAddr: getEnvOrDefault("HEALTH_ADDR", "0.0.0.0:8080"),
 
 		TGToken:  os.Getenv("TG_TOKEN"),
 		TGChatID: os.Getenv("TG_CHAT_ID"),

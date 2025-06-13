@@ -24,7 +24,7 @@ type Scheduler struct {
 }
 
 func NewScheduler(repo *db.Repository, bot *tgbotapi.BotAPI, cfg *config.Config) (*Scheduler, error) {
-	// Создаем wg-agent клиент
+	
 	wgConfig := wgagent.Config{
 		Addr: cfg.WGAgentAddr,
 	}
@@ -43,25 +43,25 @@ func NewScheduler(repo *db.Repository, bot *tgbotapi.BotAPI, cfg *config.Config)
 }
 
 func (s *Scheduler) Start() error {
-	// Cron-задача: отключение истекших подписок (ежедневно в 00:10)
+	
 	_, err := s.cron.AddFunc("10 0 * * *", s.disableExpiredSubscriptions)
 	if err != nil {
 		return fmt.Errorf("failed to add expired subscriptions job: %w", err)
 	}
 
-	// Cron-задача: напоминания об истечении (каждые 30 минут)
+	
 	_, err = s.cron.AddFunc("*/30 * * * *", s.sendExpirationReminders)
 	if err != nil {
 		return fmt.Errorf("failed to add expiration reminders job: %w", err)
 	}
 
-	// Cron-задача: health-check wg-agent (каждые 5 минут)
+	
 	_, err = s.cron.AddFunc("*/5 * * * *", s.healthCheckWGAgent)
 	if err != nil {
 		return fmt.Errorf("failed to add health check job: %w", err)
 	}
 
-	// Запускаем планировщик
+	
 	s.cron.Start()
 	slog.Info("Cron scheduler started")
 
@@ -74,11 +74,11 @@ func (s *Scheduler) Stop() {
 	slog.Info("Cron scheduler stopped")
 }
 
-// disableExpiredSubscriptions отключает все подписки с истекшим сроком
+
 func (s *Scheduler) disableExpiredSubscriptions() {
 	slog.Info("Running expired subscriptions cleanup...")
 
-	// Получаем все активные подписки с истекшим сроком
+	
 	var expiredSubs []db.Subscription
 	today := time.Now().Format("2006-01-02")
 
@@ -98,7 +98,7 @@ func (s *Scheduler) disableExpiredSubscriptions() {
 	ctx := context.Background()
 
 	for _, sub := range expiredSubs {
-		// Сначала отключаем peer
+		
 		disableReq := &wgagent.DisablePeerRequest{
 			Interface: sub.Interface,
 			PublicKey: sub.PublicKey,
@@ -110,7 +110,7 @@ func (s *Scheduler) disableExpiredSubscriptions() {
 			continue
 		}
 
-		// Затем удаляем peer (для полной очистки)
+		
 		removeReq := &wgagent.RemovePeerRequest{
 			Interface: sub.Interface,
 			PublicKey: sub.PublicKey,
@@ -124,21 +124,21 @@ func (s *Scheduler) disableExpiredSubscriptions() {
 			removed++
 		}
 
-		// Обновляем статус в БД
+		
 		s.repo.DB().Model(&sub).Update("active", false)
 	}
 
 	slog.Info("Expired subscriptions cleanup completed", "disabled", disabled, "removed", removed)
 
-	// Отправляем отчет супер-админу
+	
 	s.sendAdminReport(fmt.Sprintf("🕒 Автоматическая очистка:\n✅ Отключено: %d\n🗑 Удалено: %d", disabled, removed))
 }
 
-// sendExpirationReminders отправляет напоминания о скором истечении подписок
+
 func (s *Scheduler) sendExpirationReminders() {
 	slog.Info("Checking for expiration reminders...")
 
-	// Получаем подписки, которые истекают через 3 дня
+	
 	threeDaysLater := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
 
 	var soonExpiringSubs []db.Subscription
@@ -153,7 +153,7 @@ func (s *Scheduler) sendExpirationReminders() {
 	}
 
 	if len(soonExpiringSubs) == 0 {
-		return // Нет подписок, которые скоро истекают
+		return 
 	}
 
 	slog.Info("Found subscriptions expiring in 3 days", "count", len(soonExpiringSubs))
@@ -178,11 +178,11 @@ func (s *Scheduler) sendExpirationReminders() {
 	}
 }
 
-// healthCheckWGAgent проверяет состояние wg-agent
-func (s *Scheduler) healthCheckWGAgent() {
-	// Простая проверка доступности wg-agent
 
-	// Пытаемся создать клиент
+func (s *Scheduler) healthCheckWGAgent() {
+	
+
+	
 	wgConfig := wgagent.Config{
 		Addr: s.cfg.WGAgentAddr,
 	}
@@ -197,7 +197,7 @@ func (s *Scheduler) healthCheckWGAgent() {
 	slog.Info("WG-Agent health check passed")
 }
 
-// sendAdminReport отправляет отчет супер-админу
+
 func (s *Scheduler) sendAdminReport(message string) {
 	if s.cfg.SuperAdminID == "" {
 		return
@@ -212,7 +212,7 @@ func (s *Scheduler) sendAdminReport(message string) {
 	s.bot.Send(msg)
 }
 
-// sendHealthAlert отправляет алерт о проблемах со здоровьем системы
+
 func (s *Scheduler) sendHealthAlert(message string) {
 	slog.Warn("Health alert", "message", message)
 	s.sendAdminReport("🚨 " + message)

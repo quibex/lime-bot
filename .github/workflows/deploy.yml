@@ -73,26 +73,31 @@ jobs:
           REVIEWS_CHANNEL_ID: ${{ secrets.REVIEWS_CHANNEL_ID }}
           DB_DSN: ${{ secrets.DB_DSN || 'file://data/limevpn.db' }}
           WG_AGENT_ADDR: ${{ secrets.WG_AGENT_ADDR }}
+          ALERT_BOT_TOKEN: ${{ secrets.ALERT_BOT_TOKEN }}
+          ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << EOF
             sudo mkdir -p /opt/lime-bot
             sudo mkdir -p /data
             cd /opt/lime-bot
+            sudo sh -c "echo 'export ALERT_BOT_TOKEN=$ALERT_BOT_TOKEN' >> /etc/environment"
+            sudo sh -c "echo 'export ALERT_CHAT_ID=$ALERT_CHAT_ID' >> /etc/environment"
             docker rm -f lime-bot-container || true
-            docker pull ${DOCKERHUB_USERNAME}/lime-bot:latest
+            docker pull $DOCKERHUB_USERNAME/lime-bot:latest
             docker run -d \
               --name lime-bot-container \
               --restart unless-stopped \
               --network host \
               -v /etc/lime-bot:/etc/lime-bot:ro \
               -v /data:/data \
-              -e BOT_TOKEN="${BOT_TOKEN}" \
-              -e SUPER_ADMIN_ID="${SUPER_ADMIN_ID}" \
-              -e REVIEWS_CHANNEL_ID="${REVIEWS_CHANNEL_ID}" \
-              -e DB_DSN="${DB_DSN}" \
-              -e WG_AGENT_ADDR="${WG_AGENT_ADDR}" \
-              -e WG_CLIENT_CERT="/etc/lime-bot/client.pem" \
-              -e WG_CLIENT_KEY="/etc/lime-bot/client-key.pem" \
-              -e WG_CA_CERT="/etc/lime-bot/ca.pem" \
-              ${DOCKERHUB_USERNAME}/lime-bot:latest
-          EOF 
+              -e BOT_TOKEN=$BOT_TOKEN \
+              -e SUPER_ADMIN_ID=$SUPER_ADMIN_ID \
+              -e REVIEWS_CHANNEL_ID=$REVIEWS_CHANNEL_ID \
+              -e DB_DSN=$DB_DSN \
+              -e WG_AGENT_ADDR=$WG_AGENT_ADDR \
+              -e WG_CLIENT_CERT=/etc/lime-bot/client.pem \
+              -e WG_CLIENT_KEY=/etc/lime-bot/client-key.pem \
+              -e WG_CA_CERT=/etc/lime-bot/ca.pem \
+              -e HEALTH_ADDR=0.0.0.0:8080 \
+              $DOCKERHUB_USERNAME/lime-bot:latest
+EOF 

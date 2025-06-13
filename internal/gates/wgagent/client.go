@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Temporary structs until we get the actual proto definitions
+
 type GeneratePeerConfigRequest struct {
 	Interface      string
 	ServerEndpoint string
@@ -72,7 +72,7 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) GeneratePeerConfig(ctx context.Context, req *GeneratePeerConfigRequest) (*GeneratePeerConfigResponse, error) {
-	// Mock implementation for now
+	
 	return &GeneratePeerConfigResponse{
 		PrivateKey: "mock_private_key",
 		PublicKey:  "mock_public_key",
@@ -83,7 +83,7 @@ func (c *Client) GeneratePeerConfig(ctx context.Context, req *GeneratePeerConfig
 }
 
 func (c *Client) AddPeer(ctx context.Context, req *AddPeerRequest) (*AddPeerResponse, error) {
-	// Mock implementation for now
+	
 	return &AddPeerResponse{
 		ListenPort: 51820,
 		Config:     fmt.Sprintf("mock_config_for_peer_%s", req.PeerID),
@@ -92,16 +92,16 @@ func (c *Client) AddPeer(ctx context.Context, req *AddPeerRequest) (*AddPeerResp
 }
 
 func (c *Client) RemovePeer(ctx context.Context, req *RemovePeerRequest) error {
-	// Mock implementation for now
+	
 	return nil
 }
 
 func (c *Client) DisablePeer(ctx context.Context, req *DisablePeerRequest) error {
-	// Mock implementation for now
+	
 	return nil
 }
 
 func (c *Client) EnablePeer(ctx context.Context, req *EnablePeerRequest) error {
-	// Mock implementation for now
+	
 	return nil
 }

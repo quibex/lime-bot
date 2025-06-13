@@ -13,14 +13,12 @@ import (
 	"lime-bot/internal/db"
 )
 
-// Service инкапсулирует всю логику Telegram-бота.
 type Service struct {
 	bot  *tgbotapi.BotAPI
 	repo *db.Repository
 	cfg  *config.Config
 }
 
-// New создаёт Telegram-сервис.
 func New(cfg *config.Config, repo *db.Repository) (*Service, error) {
 	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
@@ -31,9 +29,7 @@ func New(cfg *config.Config, repo *db.Repository) (*Service, error) {
 	return &Service{bot: bot, repo: repo, cfg: cfg}, nil
 }
 
-// Start запускает цикл обработки апдейтов Telegram.
 func (s *Service) Start(ctx context.Context) error {
-	// Настраиваем получение обновлений.
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
@@ -51,7 +47,6 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) handleUpdate(upd tgbotapi.Update) {
 	if upd.Message != nil {
-		// Регистрируем пользователя
 		user := &db.User{
 			TgID:     upd.Message.From.ID,
 			Username: upd.Message.From.UserName,
@@ -61,7 +56,6 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 		if upd.Message.IsCommand() {
 			s.handleCommand(upd.Message)
 		} else {
-			// Проверяем, не ожидается ли отзыв
 			s.handleFeedbackMessage(upd.Message)
 		}
 		return
@@ -76,25 +70,21 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 
-	// Обработка callback'ов для покупки
 	if strings.HasPrefix(data, "buy_") {
 		s.handleBuyCallback(callback)
 		return
 	}
 
-	// Обработка callback'ов для подписок
 	if strings.HasPrefix(data, "sub_") {
 		s.handleSubscriptionCallback(callback)
 		return
 	}
 
-	// Обработка callback'ов для административных функций
 	if strings.HasPrefix(data, "admin_") || strings.HasPrefix(data, "payment_") || strings.HasPrefix(data, "info_user_") {
 		s.handleAdminCallback(callback)
 		return
 	}
 
-	// Обработка callback'ов для архивирования тарифов
 	if strings.HasPrefix(data, "archive_plan_") {
 		planIDStr := strings.TrimPrefix(data, "archive_plan_")
 		planID, err := strconv.ParseUint(planIDStr, 10, 32)
@@ -103,7 +93,6 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 			return
 		}
 
-		// Архивируем тариф
 		result := s.repo.DB().Model(&db.Plan{}).Where("id = ?", planID).Update("archived", true)
 		if result.Error != nil {
 			s.answerCallback(callback.ID, "Ошибка архивирования")
@@ -112,7 +101,6 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 
 		s.answerCallback(callback.ID, "Тариф архивирован")
 
-		// Обновляем сообщение
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -122,7 +110,6 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	// Обработка callback'ов для архивирования способов оплаты
 	if strings.HasPrefix(data, "archive_method_") {
 		methodIDStr := strings.TrimPrefix(data, "archive_method_")
 		methodID, err := strconv.ParseUint(methodIDStr, 10, 32)
@@ -131,7 +118,6 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 			return
 		}
 
-		// Архивируем способ оплаты
 		result := s.repo.DB().Model(&db.PaymentMethod{}).Where("id = ?", methodID).Update("archived", true)
 		if result.Error != nil {
 			s.answerCallback(callback.ID, "Ошибка архивирования")
@@ -140,7 +126,6 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 
 		s.answerCallback(callback.ID, "Способ оплаты архивирован")
 
-		// Обновляем сообщение
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -320,7 +305,6 @@ func (s *Service) handleArchivePlan(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Создаем inline клавиатуру
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 	for _, plan := range plans {
 		btn := tgbotapi.NewInlineKeyboardButtonData(
@@ -346,12 +330,11 @@ func (s *Service) reply(chatID int64, text string) error {
 }
 
 func (s *Service) isAdmin(userID int64) bool {
-	// Проверка супер-админа
+
 	if superAdminID, err := strconv.ParseInt(s.cfg.SuperAdminID, 10, 64); err == nil && superAdminID == userID {
 		return true
 	}
 
-	// Проверка в БД
 	var admin db.Admin
 	result := s.repo.DB().Where("tg_id = ? AND disabled = false", userID).First(&admin)
 	return result.Error == nil
@@ -362,7 +345,6 @@ func (s *Service) answerCallback(callbackID, text string) {
 	s.bot.Request(callback)
 }
 
-// Bot возвращает экземпляр Telegram бота
 func (s *Service) Bot() *tgbotapi.BotAPI {
 	return s.bot
 }

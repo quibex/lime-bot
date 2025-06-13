@@ -18,7 +18,7 @@ type Interface struct {
 	LastIP   string
 }
 
-// Plan - тарифы
+
 type Plan struct {
 	ID           uint      `gorm:"primaryKey"`
 	Name         string    `gorm:"not null"`
@@ -28,7 +28,7 @@ type Plan struct {
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
-// User - пользователи
+
 type User struct {
 	TgID      int64 `gorm:"primaryKey"`
 	Username  string
@@ -37,14 +37,14 @@ type User struct {
 	CreatedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
-// Admin - администраторы
+
 type Admin struct {
 	TgID     int64  `gorm:"primaryKey"`
 	Role     string `gorm:"check:role IN ('super','cashier','support')"`
 	Disabled bool   `gorm:"default:false"`
 }
 
-// PaymentMethod - способы оплаты (реквизиты)
+
 type PaymentMethod struct {
 	ID          uint      `gorm:"primaryKey"`
 	PhoneNumber string    `gorm:"not null"`
@@ -54,7 +54,7 @@ type PaymentMethod struct {
 	CreatedAt   time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
-// Payment - платежи
+
 type Payment struct {
 	ID            uint  `gorm:"primaryKey"`
 	UserID        int64 `gorm:"not null"`
@@ -67,14 +67,14 @@ type Payment struct {
 	ApprovedBy    *int64
 	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 
-	// Relations
+	
 	User            User          `gorm:"foreignKey:UserID;references:TgID"`
 	Method          PaymentMethod `gorm:"foreignKey:MethodID"`
 	Plan            Plan          `gorm:"foreignKey:PlanID"`
 	ApprovedByAdmin *Admin        `gorm:"foreignKey:ApprovedBy;references:TgID"`
 }
 
-// Subscription - подписки (ключи)
+
 type Subscription struct {
 	ID         uint      `gorm:"primaryKey"`
 	UserID     int64     `gorm:"not null"`
@@ -90,20 +90,20 @@ type Subscription struct {
 	Active     bool      `gorm:"default:true"`
 	PaymentID  *uint
 
-	// Relations
+	
 	User    User     `gorm:"foreignKey:UserID;references:TgID"`
 	Plan    Plan     `gorm:"foreignKey:PlanID"`
 	Payment *Payment `gorm:"foreignKey:PaymentID"`
 }
 
-// Referral - рефералы
+
 type Referral struct {
 	ID        uint      `gorm:"primaryKey"`
 	InviterID int64     `gorm:"not null"`
 	InviteeID int64     `gorm:"not null"`
 	CreatedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 
-	// Relations
+	
 	Inviter User `gorm:"foreignKey:InviterID;references:TgID"`
 	Invitee User `gorm:"foreignKey:InviteeID;references:TgID"`
 }
