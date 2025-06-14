@@ -1,6 +1,9 @@
 package db
 
 import (
+	"fmt"
+	"strings"
+
 	"gorm.io/gorm"
 )
 
@@ -19,49 +22,65 @@ func Migrate(db *gorm.DB) error {
 		return err
 	}
 
-	// Обновляем constraint для ролей админов
-	return updateAdminRoleConstraint(db)
+	// Обновляем enum-constraint'ы
+	if err := updateEnumConstraint(db, "admins", "role", []string{"super", "admin", "cashier", "support"}); err != nil {
+		return err
+	}
+	return updateEnumConstraint(db, "payments", "status", []string{"pending", "approved", "rejected"})
 }
 
-func updateAdminRoleConstraint(db *gorm.DB) error {
-	// Проверяем тип базы данных
-	switch db.Dialector.Name() {
-	case "sqlite":
-		// SQLite не поддерживает изменение constraints, пересоздаем таблицу
-		return recreateAdminTableSQLite(db)
+// updateEnumConstraint гарантирует, что для столбца есть актуальный CHECK-constraint
+func updateEnumConstraint(db *gorm.DB, table, column string, allowed []string) error {
+	name := db.Dialector.Name()
+
+	allowedList := "'" + strings.Join(allowed, "','") + "'"
+	constraint := fmt.Sprintf("chk_%s_%s", table, column)
+
+	switch name {
 	case "postgres":
-		// PostgreSQL
-		return db.Exec("ALTER TABLE admins DROP CONSTRAINT IF EXISTS chk_admins_role; ALTER TABLE admins ADD CONSTRAINT chk_admins_role CHECK (role IN ('super','admin','cashier','support'))").Error
+		sql := fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s; ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s IN (%s))", table, constraint, table, constraint, column, allowedList)
+		return db.Exec(sql).Error
+
 	case "mysql":
-		// MySQL
-		return db.Exec("ALTER TABLE admins DROP CHECK chk_admins_role; ALTER TABLE admins ADD CONSTRAINT chk_admins_role CHECK (role IN ('super','admin','cashier','support'))").Error
+		sql := fmt.Sprintf("ALTER TABLE %s DROP CHECK %s; ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s IN (%s))", table, constraint, table, constraint, column, allowedList)
+		return db.Exec(sql).Error
+
+	case "sqlite":
+		return recreateSQLiteTableWithConstraint(db, table, column, allowedList, constraint)
 	}
 	return nil
 }
 
-func recreateAdminTableSQLite(db *gorm.DB) error {
-	// Для SQLite создаем новую таблицу с правильным constraint
+// recreateSQLiteTableWithConstraint пересоздает таблицу в SQLite без потери данных
+func recreateSQLiteTableWithConstraint(db *gorm.DB, table, column, allowedList, constraint string) error {
 	return db.Transaction(func(tx *gorm.DB) error {
+		// Получаем схему оригинальной таблицы
+		var schema string
+		if err := tx.Raw("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", table).Row().Scan(&schema); err != nil {
+			return err
+		}
+
+		// Удаляем старый CHECK (если был) и добавляем новый
+		// Простой способ: убираем строку с CHECK и добавляем свежую
+		newCheck := fmt.Sprintf("CHECK (%s IN (%s))", column, allowedList)
+		schema = strings.ReplaceAll(schema, constraint, "")
+
 		// Создаем временную таблицу
-		if err := tx.Exec(`CREATE TABLE admins_new (
-			tg_id INTEGER PRIMARY KEY,
-			role TEXT CHECK (role IN ('super','admin','cashier','support')),
-			disabled BOOLEAN DEFAULT false
-		)`).Error; err != nil {
+		tmp := table + "_new"
+		createSQL := strings.Replace(schema, table, tmp, 1)
+		createSQL = strings.Replace(createSQL, ")", ", "+newCheck+")", 1)
+		if err := tx.Exec(createSQL).Error; err != nil {
 			return err
 		}
 
 		// Копируем данные
-		if err := tx.Exec("INSERT INTO admins_new (tg_id, role, disabled) SELECT tg_id, role, disabled FROM admins WHERE role IN ('super','admin','cashier','support')").Error; err != nil {
+		if err := tx.Exec(fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", tmp, table)).Error; err != nil {
 			return err
 		}
 
-		// Удаляем старую таблицу
-		if err := tx.Exec("DROP TABLE admins").Error; err != nil {
+		if err := tx.Exec("DROP TABLE " + table).Error; err != nil {
 			return err
 		}
-
-		// Переименовываем новую таблицу
-		return tx.Exec("ALTER TABLE admins_new RENAME TO admins").Error
+		return tx.Exec("ALTER TABLE " + tmp + " RENAME TO " + table).Error
 	})
 }

@@ -36,7 +36,8 @@ func (r *Repository) DB() *gorm.DB {
 }
 
 func (r *Repository) AutoMigrate() error {
-	return r.db.AutoMigrate(
+	// обычная миграция схемы
+	if err := r.db.AutoMigrate(
 		&Plan{},
 		&User{},
 		&Admin{},
@@ -44,5 +45,9 @@ func (r *Repository) AutoMigrate() error {
 		&Payment{},
 		&Subscription{},
 		&Referral{},
-	)
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
