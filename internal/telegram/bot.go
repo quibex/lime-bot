@@ -116,6 +116,7 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 		if upd.Message.IsCommand() {
 			s.handleCommand(upd.Message)
 		} else {
+			s.handleReceiptMessage(upd.Message)
 			s.handleFeedbackMessage(upd.Message)
 		}
 		return

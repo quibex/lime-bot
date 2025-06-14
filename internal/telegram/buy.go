@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,12 +18,13 @@ import (
 )
 
 type BuyState struct {
-	UserID   int64
-	PlanID   uint
-	Platform Platform
-	Qty      int
-	MethodID uint
-	Step     BuyStep
+	UserID    int64
+	PlanID    uint
+	Platform  Platform
+	Qty       int
+	MethodID  uint
+	PaymentID uint
+	Step      BuyStep
 }
 
 var buyStates = make(map[int64]*BuyState)
@@ -213,9 +215,8 @@ func (s *Service) handleMethodSelection(callback *tgbotapi.CallbackQuery, state 
 		return
 	}
 
-	// Очищаем состояние
-	delete(buyStates, state.UserID)
-	s.answerCallback(callback.ID, "Покупка обработана!")
+	state.Step = BuyStepReceipt
+	s.answerCallback(callback.ID, "Следуйте инструкциям по оплате")
 }
 
 func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuyState) error {
@@ -318,13 +319,15 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 
 	slog.Info("Payment created successfully", "payment_id", payment.ID, "user_id", state.UserID, "amount", totalAmount)
 
-	// Отправляем инструкции по оплате вместо готового ключа
+	state.PaymentID = payment.ID
+
+	// Отправляем инструкции по оплате
 	s.sendPaymentInstructions(callback.Message.Chat.ID, payment, &method, &plan)
 
 	return nil
 }
 
-func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan, paymentID uint) (*db.Subscription, error) {
+func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan, paymentID uint) (*db.Subscription, string, string, error) {
 	slog.Info("Creating subscription", "user_id", state.UserID, "plan_id", state.PlanID, "payment_id", paymentID)
 
 	ctx := context.Background()
@@ -352,7 +355,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 			"payment_id": paymentID,
 			"wg_addr":    s.cfg.WGAgentAddr,
 		})
-		return nil, wgErr
+		return nil, "", "", wgErr
 	}
 	defer wgClient.Close()
 
@@ -375,7 +378,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 			"payment_id": paymentID,
 			"interface":  "wg0",
 		})
-		return nil, wgErr
+		return nil, "", "", wgErr
 	}
 
 	slog.Info("Peer config generated", "user_id", state.UserID, "public_key", peerResp.PublicKey[:10]+"...")
@@ -391,7 +394,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 
 	slog.Info("Adding peer to interface", "user_id", state.UserID, "peer_id", peerID, "allowed_ip", peerResp.AllowedIP)
 
-	_, err = wgClient.AddPeer(ctx, addReq)
+	addResp, err := wgClient.AddPeer(ctx, addReq)
 	if err != nil {
 		wgErr := ErrWGAgentf("Failed to add peer: %v", err)
 		s.logAndReportError("Peer addition failed", wgErr, map[string]interface{}{
@@ -399,7 +402,7 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 			"peer_id":    peerID,
 			"public_key": peerResp.PublicKey,
 		})
-		return nil, wgErr
+		return nil, "", "", wgErr
 	}
 
 	slog.Info("Peer added successfully", "user_id", state.UserID, "peer_id", peerID)
@@ -436,21 +439,29 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 			"peer_id":    peerID,
 			"payment_id": paymentID,
 		})
-		return nil, dbErr
+		return nil, "", "", dbErr
 	}
 
 	slog.Info("Subscription created successfully", "subscription_id", subscription.ID, "user_id", state.UserID)
-	return subscription, nil
+	cfg := addResp.Config
+	qr := addResp.QRCode
+	if cfg == "" {
+		cfg = peerResp.Config
+		qr = peerResp.QRCode
+	}
+	return subscription, cfg, qr, nil
 }
 
 func (s *Service) sendSubscriptionToUser(chatID int64, subscription *db.Subscription) {
+	s.sendSubscriptionToUserWithData(chatID, subscription, "", "")
+}
+
+func (s *Service) sendSubscriptionToUserWithData(chatID int64, subscription *db.Subscription, config string, qr string) {
 	text := fmt.Sprintf(`🔑 Ваш VPN ключ готов!
 
 📋 ID: %s
 📱 Платформа: %s
-📅 Действует до: %s
-
-📄 Конфигурация в следующем сообщении...`,
+📅 Действует до: %s`,
 		subscription.PeerID,
 		subscription.Platform,
 		subscription.EndDate.Format("02.01.2006"),
@@ -458,9 +469,26 @@ func (s *Service) sendSubscriptionToUser(chatID int64, subscription *db.Subscrip
 
 	s.reply(chatID, text)
 
-	// Отправляем настоящую конфигурацию вместо мока
-	config := s.generateWireguardConfig(subscription)
-	s.reply(chatID, fmt.Sprintf("```\n%s\n```", config))
+	if Platform(subscription.Platform) == PlatformAndroid || Platform(subscription.Platform) == PlatformIOS {
+		if qr != "" {
+			data, err := base64.StdEncoding.DecodeString(qr)
+			if err == nil {
+				photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{Name: "qr.png", Bytes: data})
+				photo.Caption = "Отсканируйте QR код"
+				s.bot.Send(photo)
+				return
+			}
+		}
+	}
+
+	if config == "" {
+		config = s.generateWireguardConfig(subscription)
+	}
+
+	file := tgbotapi.FileBytes{Name: "config.conf", Bytes: []byte(config)}
+	doc := tgbotapi.NewDocument(chatID, file)
+	doc.Caption = "Конфигурация WireGuard"
+	s.bot.Send(doc)
 }
 
 func (s *Service) sendPaymentInfo(chatID int64, payment *db.Payment, method *db.PaymentMethod, plan *db.Plan) {
@@ -520,6 +548,68 @@ func (s *Service) sendPaymentInstructions(chatID int64, payment *db.Payment, met
 	)
 
 	s.reply(chatID, text)
+}
+
+func (s *Service) handleReceiptMessage(msg *tgbotapi.Message) {
+	state, ok := buyStates[msg.From.ID]
+	if !ok || state.Step != BuyStepReceipt {
+		return
+	}
+
+	var fileID string
+	if msg.Photo != nil && len(msg.Photo) > 0 {
+		fileID = msg.Photo[len(msg.Photo)-1].FileID
+	} else if msg.Document != nil {
+		fileID = msg.Document.FileID
+	} else {
+		s.reply(msg.Chat.ID, "Отправьте скриншот или PDF чек")
+		return
+	}
+
+	tx := s.repo.DB().Begin()
+	if tx.Error != nil {
+		s.reply(msg.Chat.ID, "Ошибка БД")
+		return
+	}
+
+	var payment db.Payment
+	if err := tx.First(&payment, state.PaymentID).Error; err != nil {
+		tx.Rollback()
+		s.reply(msg.Chat.ID, "Платеж не найден")
+		return
+	}
+
+	payment.ReceiptFileID = fileID
+	if err := tx.Save(&payment).Error; err != nil {
+		tx.Rollback()
+		s.reply(msg.Chat.ID, "Ошибка сохранения чека")
+		return
+	}
+
+	var plan db.Plan
+	if err := tx.First(&plan, state.PlanID).Error; err != nil {
+		tx.Rollback()
+		s.reply(msg.Chat.ID, "Ошибка получения тарифа")
+		return
+	}
+
+	for i := 0; i < state.Qty; i++ {
+		sub, cfg, qr, err := s.createSubscription(tx, state, &plan, payment.ID)
+		if err != nil {
+			tx.Rollback()
+			s.handleError(msg.Chat.ID, err)
+			return
+		}
+		s.sendSubscriptionToUserWithData(msg.Chat.ID, sub, cfg, qr)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		s.reply(msg.Chat.ID, "Ошибка БД")
+		return
+	}
+
+	delete(buyStates, state.UserID)
+	s.reply(msg.Chat.ID, "✅ Чек получен. Ваши ключи выше")
 }
 
 func (s *Service) generateWireguardConfig(subscription *db.Subscription) string {
