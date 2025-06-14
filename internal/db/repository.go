@@ -49,5 +49,13 @@ func (r *Repository) AutoMigrate() error {
 		return err
 	}
 
+	// ensure enum constraints are up to date
+	if err := updateEnumConstraint(r.db, "admins", "role", []string{"super", "admin", "cashier", "support"}); err != nil {
+		return err
+	}
+	if err := updateEnumConstraint(r.db, "payments", "status", []string{"pending", "approved", "rejected"}); err != nil {
+		return err
+	}
+
 	return nil
 }
