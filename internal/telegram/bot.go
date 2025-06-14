@@ -101,10 +101,10 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	if strings.HasPrefix(data, CallbackAdminList.String()) ||
-		strings.HasPrefix(data, CallbackAdminAdd.String()) ||
-		strings.HasPrefix(data, CallbackAdminDisable.String()) ||
-		strings.HasPrefix(data, CallbackAdminCashier.String()) ||
+	if data == CallbackAdminList.String() ||
+		data == CallbackAdminAdd.String() ||
+		data == CallbackAdminDisable.String() ||
+		data == CallbackAdminCashier.String() ||
 		strings.HasPrefix(data, CallbackPaymentApprove.String()) ||
 		strings.HasPrefix(data, CallbackPaymentReject.String()) ||
 		strings.HasPrefix(data, CallbackInfoUser.String()) ||

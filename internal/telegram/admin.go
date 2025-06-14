@@ -220,7 +220,7 @@ func (s *Service) sendUserInfo(chatID int64, userID int64) {
 func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 
-	if strings.HasPrefix(data, CallbackAdminList.String()) {
+	if data == CallbackAdminList.String() || data == CallbackAdminAdd.String() || data == CallbackAdminDisable.String() || data == CallbackAdminCashier.String() {
 		s.handleAdminManagementCallback(callback)
 		return
 	}
@@ -244,6 +244,7 @@ func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	// Отключение админа по префиксу
 	if strings.HasPrefix(data, CallbackDisableAdmin.String()) {
 		userIDStr := strings.TrimPrefix(data, CallbackDisableAdmin.String())
 		userID, err := strconv.ParseInt(userIDStr, 10, 64)
@@ -252,8 +253,7 @@ func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 			return
 		}
 
-		err = s.disableAdmin(userID)
-		if err != nil {
+		if err := s.disableAdmin(userID); err != nil {
 			s.answerCallback(callback.ID, fmt.Sprintf("Ошибка: %v", err))
 			return
 		}
@@ -268,6 +268,7 @@ func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	// Назначение кассира
 	if strings.HasPrefix(data, CallbackSetCashier.String()) {
 		userIDStr := strings.TrimPrefix(data, CallbackSetCashier.String())
 		userID, err := strconv.ParseInt(userIDStr, 10, 64)
@@ -276,8 +277,7 @@ func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 			return
 		}
 
-		err = s.setCashierRole(userID)
-		if err != nil {
+		if err := s.setCashierRole(userID); err != nil {
 			s.answerCallback(callback.ID, fmt.Sprintf("Ошибка: %v", err))
 			return
 		}
@@ -491,10 +491,11 @@ func (s *Service) showAddAdminForm(callback *tgbotapi.CallbackQuery) {
 
 Доступные роли:
 • super - суперадмин
+• admin - администратор
 • cashier - кассир  
 • support - поддержка
 
-Пример: /add_admin @john_doe cashier`
+Пример: /add_admin @john_doe admin`
 
 	editMsg := tgbotapi.NewEditMessageText(
 		callback.Message.Chat.ID,
