@@ -40,16 +40,27 @@ send_message() {
     local message="$1"
     local save_to_file="$2"
     if [ -n "$ALERT_BOT_TOKEN" ] && [ -n "$ALERT_CHAT_ID" ]; then
+        echo "DEBUG: Отправляем сообщение в Telegram..." >&2
+        echo "DEBUG: ALERT_BOT_TOKEN установлен: ${ALERT_BOT_TOKEN:0:10}..." >&2
+        echo "DEBUG: ALERT_CHAT_ID: $ALERT_CHAT_ID" >&2
+        
         response=$(curl -s -X POST "https://api.telegram.org/bot$ALERT_BOT_TOKEN/sendMessage" \
                         -d "chat_id=$ALERT_CHAT_ID" \
                         -d "text=$message" \
                         -d "parse_mode=HTML")
         
+        echo "DEBUG: Ответ от Telegram API: $response" >&2
+        
         # Extract message_id from response and save it
         message_id=$(echo "$response" | grep -o '"message_id":[0-9]*' | cut -d':' -f2)
         if [ -n "$message_id" ] && [ -n "$save_to_file" ]; then
             echo "$message_id" > "$save_to_file"
+            echo "DEBUG: Сохранен message_id: $message_id в файл: $save_to_file" >&2
         fi
+    else
+        echo "DEBUG: Переменные окружения не установлены!" >&2
+        echo "DEBUG: ALERT_BOT_TOKEN: ${ALERT_BOT_TOKEN:-НЕ УСТАНОВЛЕН}" >&2
+        echo "DEBUG: ALERT_CHAT_ID: ${ALERT_CHAT_ID:-НЕ УСТАНОВЛЕН}" >&2
     fi
 }
 
@@ -57,12 +68,16 @@ edit_message() {
     local message="$1"
     local message_id="$2"
     if [ -n "$ALERT_BOT_TOKEN" ] && [ -n "$ALERT_CHAT_ID" ] && [ -n "$message_id" ]; then
+        echo "DEBUG: Редактируем сообщение ID: $message_id" >&2
         curl -s -X POST "https://api.telegram.org/bot$ALERT_BOT_TOKEN/editMessageText" \
              -d "chat_id=$ALERT_CHAT_ID" \
              -d "message_id=$message_id" \
              -d "text=$message" \
              -d "parse_mode=HTML" > /dev/null 2>&1
         return $?
+    else
+        echo "DEBUG: Не могу редактировать сообщение - отсутствуют параметры" >&2
+        echo "DEBUG: message_id: ${message_id:-НЕ УСТАНОВЛЕН}" >&2
     fi
     return 1
 }

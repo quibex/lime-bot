@@ -25,6 +25,15 @@ func New(cfg *config.Config, repo *db.Repository) (*Service, error) {
 		return nil, err
 	}
 	bot.Debug = false
+
+	// Удаляем webhook чтобы использовать long-polling
+	_, err = bot.Request(tgbotapi.DeleteWebhookConfig{})
+	if err != nil {
+		slog.Warn("Не удалось удалить webhook", "error", err)
+	} else {
+		slog.Info("Webhook удален, переключились на long-polling")
+	}
+
 	slog.Info("Авторизован как телеграм бот", "username", bot.Self.UserName)
 	return &Service{bot: bot, repo: repo, cfg: cfg}, nil
 }

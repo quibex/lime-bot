@@ -13,6 +13,14 @@ tidy:
 all: tidy
 	go build -o bin/bot-service ./cmd/bot-service
 
+# Сборка с CGO для SQLite (для локальной разработки)
+build-cgo: tidy
+	CGO_ENABLED=1 go build -o bin/bot-service ./cmd/bot-service
+
+# Docker сборка
+docker-build:
+	docker build -t lime-bot .
+
 generate:
 	@echo "Generating protobuf files..."
 	protoc --go_out=. --go-grpc_out=. pkg/wgagent/wgagent.proto
