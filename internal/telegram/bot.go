@@ -35,7 +35,16 @@ func New(cfg *config.Config, repo *db.Repository) (*Service, error) {
 	}
 
 	slog.Info("Авторизован как телеграм бот", "username", bot.Self.UserName)
-	return &Service{bot: bot, repo: repo, cfg: cfg}, nil
+
+	service := &Service{bot: bot, repo: repo, cfg: cfg}
+
+	// Устанавливаем меню команд
+	err = service.setCommands()
+	if err != nil {
+		slog.Warn("Не удалось установить меню команд", "error", err)
+	}
+
+	return service, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -79,23 +88,31 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 
-	if strings.HasPrefix(data, "buy_") {
+	if strings.HasPrefix(data, CallbackBuyPlan.String()) ||
+		strings.HasPrefix(data, CallbackBuyPlatform.String()) ||
+		strings.HasPrefix(data, CallbackBuyQty.String()) ||
+		strings.HasPrefix(data, CallbackBuyMethod.String()) {
 		s.handleBuyCallback(callback)
 		return
 	}
 
-	if strings.HasPrefix(data, "sub_") {
+	if strings.HasPrefix(data, CallbackSubPlatform.String()) {
 		s.handleSubscriptionCallback(callback)
 		return
 	}
 
-	if strings.HasPrefix(data, "admin_") || strings.HasPrefix(data, "payment_") || strings.HasPrefix(data, "info_user_") {
+	if strings.HasPrefix(data, CallbackAdminList.String()) ||
+		strings.HasPrefix(data, CallbackPaymentApprove.String()) ||
+		strings.HasPrefix(data, CallbackPaymentReject.String()) ||
+		strings.HasPrefix(data, CallbackInfoUser.String()) ||
+		strings.HasPrefix(data, CallbackDisableAdmin.String()) ||
+		strings.HasPrefix(data, CallbackSetCashier.String()) {
 		s.handleAdminCallback(callback)
 		return
 	}
 
-	if strings.HasPrefix(data, "archive_plan_") {
-		planIDStr := strings.TrimPrefix(data, "archive_plan_")
+	if strings.HasPrefix(data, CallbackArchivePlan.String()) {
+		planIDStr := strings.TrimPrefix(data, CallbackArchivePlan.String())
 		planID, err := strconv.ParseUint(planIDStr, 10, 32)
 		if err != nil {
 			s.answerCallback(callback.ID, "Неверный ID тарифа")
@@ -119,8 +136,8 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	if strings.HasPrefix(data, "archive_method_") {
-		methodIDStr := strings.TrimPrefix(data, "archive_method_")
+	if strings.HasPrefix(data, CallbackArchiveMethod.String()) {
+		methodIDStr := strings.TrimPrefix(data, CallbackArchiveMethod.String())
 		methodID, err := strconv.ParseUint(methodIDStr, 10, 32)
 		if err != nil {
 			s.answerCallback(callback.ID, "Неверный ID метода")
@@ -146,63 +163,59 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 }
 
 func (s *Service) handleCommand(msg *tgbotapi.Message) {
-	switch msg.Command() {
-	case "start":
-		s.handleStartWithRef(msg)
-	case "help":
-		s.handleHelp(msg)
-	case "plans":
-		s.handlePlans(msg)
-	case "addplan":
-		if s.isAdmin(msg.From.ID) {
-			s.handleAddPlan(msg)
-		} else {
-			s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
-		}
-	case "archiveplan":
-		if s.isAdmin(msg.From.ID) {
-			s.handleArchivePlan(msg)
-		} else {
-			s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
-		}
-	case "addpmethod":
-		if s.isAdmin(msg.From.ID) {
-			s.handleAddPaymentMethod(msg)
-		} else {
-			s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
-		}
-	case "listpmethods":
-		if s.isAdmin(msg.From.ID) {
-			s.handleListPaymentMethods(msg)
-		} else {
-			s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
-		}
-	case "archivepmethod":
-		if s.isAdmin(msg.From.ID) {
-			s.handleArchivePaymentMethod(msg)
-		} else {
-			s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
-		}
-	case "buy":
-		s.handleBuy(msg)
-	case "mykeys":
-		s.handleMyKeys(msg)
-	case "disable":
-		s.handleDisable(msg)
-	case "enable":
-		s.handleEnable(msg)
-	case "admins":
-		s.handleAdmins(msg)
-	case "payqueue":
-		s.handlePayQueue(msg)
-	case "info":
-		s.handleInfo(msg)
-	case "ref":
-		s.handleRef(msg)
-	case "feedback":
-		s.handleFeedback(msg)
-	default:
+	cmd := Command(msg.Command())
+
+	// Проверяем валидность команды
+	if !cmd.IsValid() {
 		s.handleUnknown(msg)
+		return
+	}
+
+	// Проверяем права для админских команд
+	if cmd.IsAdminOnly() && !s.isAdmin(msg.From.ID) {
+		s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
+		return
+	}
+
+	switch cmd {
+	case CmdStart:
+		s.handleStartWithRef(msg)
+	case CmdHelp:
+		s.handleHelp(msg)
+	case CmdPlans:
+		s.handlePlans(msg)
+	case CmdAddPlan:
+		s.handleAddPlan(msg)
+	case CmdArchivePlan:
+		s.handleArchivePlan(msg)
+	case CmdAddPMethod:
+		s.handleAddPaymentMethod(msg)
+	case CmdListPMethods:
+		s.handleListPaymentMethods(msg)
+	case CmdArchivePMethod:
+		s.handleArchivePaymentMethod(msg)
+	case CmdBuy:
+		s.handleBuy(msg)
+	case CmdMyKeys:
+		s.handleMyKeys(msg)
+	case CmdDisable:
+		s.handleDisable(msg)
+	case CmdEnable:
+		s.handleEnable(msg)
+	case CmdAdmins:
+		s.handleAdmins(msg)
+	case CmdPayQueue:
+		s.handlePayQueue(msg)
+	case CmdInfo:
+		s.handleInfo(msg)
+	case CmdAddAdmin:
+		s.handleAddAdmin(msg)
+	case CmdRef:
+		s.handleRef(msg)
+	case CmdFeedback:
+		s.handleFeedback(msg)
+	case CmdSupport:
+		s.handleSupport(msg)
 	}
 }
 
@@ -224,12 +237,13 @@ func (s *Service) handleHelp(msg *tgbotapi.Message) {
 /mykeys - мои ключи
 /ref - реферальная ссылка
 /feedback - отправить отзыв
+/support - служба поддержки
 /help - справка`
 
 	if s.isAdmin(msg.From.ID) {
 		text += `
 
-👑 Администраторские команды:
+⚡ Администраторские команды:
 /addplan - добавить тариф
 /archiveplan - архивировать тариф
 /addpmethod - добавить способ оплаты
@@ -237,9 +251,16 @@ func (s *Service) handleHelp(msg *tgbotapi.Message) {
 /archivepmethod - архивировать способ оплаты
 /disable <username> - отключить пользователя
 /enable <username> - включить пользователя
-/admins - управление админами
 /payqueue - очередь платежей
 /info <username> - информация о пользователе`
+
+		if s.isSuperAdmin(msg.From.ID) {
+			text += `
+
+👑 Команды суперадмина:
+/admins - управление админами
+/add_admin @username role - добавить админа`
+		}
 	}
 
 	s.reply(msg.Chat.ID, text)
@@ -328,18 +349,44 @@ func (s *Service) handleArchivePlan(msg *tgbotapi.Message) {
 	s.bot.Send(msgConfig)
 }
 
+func (s *Service) handleSupport(msg *tgbotapi.Message) {
+	var admins []db.Admin
+	result := s.repo.DB().Where("role = ? AND disabled = false", RoleSupport.String()).Find(&admins)
+	if result.Error != nil || len(admins) == 0 {
+		s.reply(msg.Chat.ID, "Служба поддержки временно недоступна. Попробуйте позже.")
+		return
+	}
+
+	text := "🎧 Служба поддержки Lime VPN\n\nНапишите одному из наших специалистов:\n\n"
+	for _, admin := range admins {
+		var user db.User
+		if err := s.repo.DB().First(&user, "tg_id = ?", admin.TgID).Error; err == nil {
+			text += fmt.Sprintf("• @%s\n", user.Username)
+		}
+	}
+
+	text += "\nОни помогут решить любые вопросы по использованию VPN!"
+	s.reply(msg.Chat.ID, text)
+}
+
 func (s *Service) handleUnknown(msg *tgbotapi.Message) {
 	s.reply(msg.Chat.ID, "Неизвестная команда. Используйте /help")
 }
 
 func (s *Service) reply(chatID int64, text string) error {
+	// Добавляем информацию о поддержке для обычных пользователей
+	if !s.isAdmin(chatID) {
+		if supportInfo := s.getSupportUsers(); supportInfo != "" {
+			text += supportInfo
+		}
+	}
+
 	msg := tgbotapi.NewMessage(chatID, text)
 	_, err := s.bot.Send(msg)
 	return err
 }
 
 func (s *Service) isAdmin(userID int64) bool {
-
 	if superAdminID, err := strconv.ParseInt(s.cfg.SuperAdminID, 10, 64); err == nil && superAdminID == userID {
 		return true
 	}
@@ -349,6 +396,42 @@ func (s *Service) isAdmin(userID int64) bool {
 	return result.Error == nil
 }
 
+func (s *Service) isSuperAdmin(userID int64) bool {
+	if superAdminID, err := strconv.ParseInt(s.cfg.SuperAdminID, 10, 64); err == nil && superAdminID == userID {
+		return true
+	}
+
+	var admin db.Admin
+	result := s.repo.DB().Where("tg_id = ? AND disabled = false", userID).First(&admin)
+	if result.Error != nil {
+		return false
+	}
+
+	return AdminRole(admin.Role).CanManageAdmins()
+}
+
+func (s *Service) getSupportUsers() string {
+	var admins []db.Admin
+	result := s.repo.DB().Where("role = ? AND disabled = false", RoleSupport.String()).Find(&admins)
+	if result.Error != nil || len(admins) == 0 {
+		return ""
+	}
+
+	var supportUsers []string
+	for _, admin := range admins {
+		var user db.User
+		if err := s.repo.DB().First(&user, "tg_id = ?", admin.TgID).Error; err == nil {
+			supportUsers = append(supportUsers, "@"+user.Username)
+		}
+	}
+
+	if len(supportUsers) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("\n\n💬 Нужна помощь? Напишите в поддержку: %s", strings.Join(supportUsers, ", "))
+}
+
 func (s *Service) answerCallback(callbackID, text string) {
 	callback := tgbotapi.NewCallback(callbackID, text)
 	s.bot.Request(callback)
@@ -356,4 +439,21 @@ func (s *Service) answerCallback(callbackID, text string) {
 
 func (s *Service) Bot() *tgbotapi.BotAPI {
 	return s.bot
+}
+
+func (s *Service) setCommands() error {
+	commands := []tgbotapi.BotCommand{
+		{Command: "start", Description: "🚀 Начать работу"},
+		{Command: "help", Description: "❓ Справка"},
+		{Command: "plans", Description: "📋 Список тарифов"},
+		{Command: "buy", Description: "💳 Купить подписку"},
+		{Command: "mykeys", Description: "🔑 Мои ключи"},
+		{Command: "ref", Description: "👥 Реферальная ссылка"},
+		{Command: "feedback", Description: "💬 Отправить отзыв"},
+		{Command: "support", Description: "🎧 Служба поддержки"},
+	}
+
+	config := tgbotapi.NewSetMyCommands(commands...)
+	_, err := s.bot.Request(config)
+	return err
 }

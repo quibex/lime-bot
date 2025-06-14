@@ -9,10 +9,11 @@ type Config struct {
 
 	DBDsn string
 
-	WGAgentAddr  string
-	WGClientCert string
-	WGClientKey  string
-	WGCACert     string
+	WGAgentAddr      string
+	WGClientCert     string
+	WGClientKey      string
+	WGCACert         string
+	WGServerEndpoint string
 
 	HealthAddr string
 
@@ -28,10 +29,11 @@ func Load() *Config {
 
 		DBDsn: getEnvOrDefault("DB_DSN", "/data/limevpn.db"),
 
-		WGAgentAddr:  getEnvOrDefault("WG_AGENT_ADDR", "wg-agent:7443"),
-		WGClientCert: os.Getenv("WG_CLIENT_CERT"),
-		WGClientKey:  os.Getenv("WG_CLIENT_KEY"),
-		WGCACert:     os.Getenv("WG_CA_CERT"),
+		WGAgentAddr:      getEnvOrDefault("WG_AGENT_ADDR", "wg-agent:7443"),
+		WGClientCert:     os.Getenv("WG_CLIENT_CERT"),
+		WGClientKey:      os.Getenv("WG_CLIENT_KEY"),
+		WGCACert:         os.Getenv("WG_CA_CERT"),
+		WGServerEndpoint: getEnvOrDefault("WG_SERVER_ENDPOINT", "vpn.example.com:51820"),
 
 		HealthAddr: getEnvOrDefault("HEALTH_ADDR", "0.0.0.0:8080"),
 
