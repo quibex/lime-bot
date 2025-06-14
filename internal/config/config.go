@@ -26,7 +26,7 @@ func Load() *Config {
 		SuperAdminID:     os.Getenv("SUPER_ADMIN_ID"),
 		ReviewsChannelID: os.Getenv("REVIEWS_CHANNEL_ID"),
 
-		DBDsn: getEnvOrDefault("DB_DSN", "file://data/limevpn.db"),
+		DBDsn: getEnvOrDefault("DB_DSN", "/data/limevpn.db"),
 
 		WGAgentAddr:  getEnvOrDefault("WG_AGENT_ADDR", "wg-agent:7443"),
 		WGClientCert: os.Getenv("WG_CLIENT_CERT"),

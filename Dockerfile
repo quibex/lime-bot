@@ -20,5 +20,4 @@ RUN apk add --no-cache ca-certificates sqlite-libs
 COPY --from=builder /app/lime-bot /usr/local/bin/lime-bot
 WORKDIR /data
 VOLUME ["/data"]
-ENV DB_DSN=file://data/limevpn.db
 CMD ["/usr/local/bin/lime-bot"]
