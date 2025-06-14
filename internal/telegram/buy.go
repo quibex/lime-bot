@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -217,14 +219,22 @@ func (s *Service) handleMethodSelection(callback *tgbotapi.CallbackQuery, state 
 }
 
 func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuyState) error {
+	slog.Info("Processing purchase", "user_id", state.UserID, "plan_id", state.PlanID, "qty", state.Qty)
+
 	// Создаем транзакцию
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
-		return tx.Error
+		err := ErrDatabasef("Failed to begin purchase transaction: %v", tx.Error)
+		s.logAndReportError("Purchase transaction failed", err, map[string]interface{}{
+			"user_id": state.UserID,
+			"plan_id": state.PlanID,
+		})
+		return err
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			slog.Error("Purchase panic", "user_id", state.UserID, "panic", r)
 		}
 	}()
 
@@ -232,15 +242,45 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 	var plan db.Plan
 	if err := tx.First(&plan, state.PlanID).Error; err != nil {
 		tx.Rollback()
-		return err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			planErr := ErrPlanNotFoundf("Plan #%v not found", state.PlanID)
+			s.logAndReportError("Plan not found during purchase", planErr, map[string]interface{}{
+				"user_id": state.UserID,
+				"plan_id": state.PlanID,
+			})
+			return planErr
+		}
+		dbErr := ErrDatabasef("Failed to fetch plan #%v: %v", state.PlanID, err)
+		s.logAndReportError("Plan fetch failed", dbErr, map[string]interface{}{
+			"user_id": state.UserID,
+			"plan_id": state.PlanID,
+		})
+		return dbErr
 	}
+
+	slog.Info("Plan fetched for purchase", "plan_id", plan.ID, "plan_name", plan.Name, "price", plan.PriceInt)
 
 	// Получаем способ оплаты
 	var method db.PaymentMethod
 	if err := tx.First(&method, state.MethodID).Error; err != nil {
 		tx.Rollback()
-		return err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			methodErr := ErrPaymentf("Payment method #%v not found", state.MethodID)
+			s.logAndReportError("Payment method not found", methodErr, map[string]interface{}{
+				"user_id":   state.UserID,
+				"method_id": state.MethodID,
+			})
+			return methodErr
+		}
+		dbErr := ErrDatabasef("Failed to fetch payment method #%v: %v", state.MethodID, err)
+		s.logAndReportError("Payment method fetch failed", dbErr, map[string]interface{}{
+			"user_id":   state.UserID,
+			"method_id": state.MethodID,
+		})
+		return dbErr
 	}
+
+	slog.Info("Payment method fetched", "method_id", method.ID, "bank", method.Bank)
 
 	// Создаем запись о платеже
 	totalAmount := plan.PriceInt * state.Qty
@@ -253,15 +293,30 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 		Status:   PaymentStatusPending.String(),
 	}
 
+	slog.Info("Creating payment record", "amount", totalAmount, "qty", state.Qty, "user_id", state.UserID)
+
 	if err := tx.Create(payment).Error; err != nil {
 		tx.Rollback()
-		return err
+		paymentErr := ErrDatabasef("Failed to create payment record: %v", err)
+		s.logAndReportError("Payment creation failed", paymentErr, map[string]interface{}{
+			"user_id": state.UserID,
+			"amount":  totalAmount,
+			"plan_id": state.PlanID,
+		})
+		return paymentErr
 	}
 
 	// Сохраняем изменения
 	if err := tx.Commit().Error; err != nil {
-		return err
+		commitErr := ErrDatabasef("Failed to commit purchase transaction: %v", err)
+		s.logAndReportError("Purchase commit failed", commitErr, map[string]interface{}{
+			"user_id":    state.UserID,
+			"payment_id": payment.ID,
+		})
+		return commitErr
 	}
+
+	slog.Info("Payment created successfully", "payment_id", payment.ID, "user_id", state.UserID, "amount", totalAmount)
 
 	// Отправляем инструкции по оплате вместо готового ключа
 	s.sendPaymentInstructions(callback.Message.Chat.ID, payment, &method, &plan)
@@ -270,31 +325,62 @@ func (s *Service) processPurchase(callback *tgbotapi.CallbackQuery, state *BuySt
 }
 
 func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan, paymentID uint) (*db.Subscription, error) {
+	slog.Info("Creating subscription", "user_id", state.UserID, "plan_id", state.PlanID, "payment_id", paymentID)
 
 	ctx := context.Background()
 
 	wgConfig := wgagent.Config{
-		Addr: s.cfg.WGAgentAddr,
+		Addr:     s.cfg.WGAgentAddr,
+		CertFile: s.cfg.WGClientCert,
+		KeyFile:  s.cfg.WGClientKey,
+		CAFile:   s.cfg.WGCACert,
 	}
+
+	// Проверяем, есть ли сертификаты для secure соединения
+	if s.cfg.WGClientCert == "" || s.cfg.WGClientKey == "" || s.cfg.WGCACert == "" {
+		slog.Warn("WG certificates not configured, using insecure connection")
+		wgConfig = wgagent.Config{
+			Addr: s.cfg.WGAgentAddr,
+		}
+	}
+
 	wgClient, err := wgagent.NewClient(wgConfig)
 	if err != nil {
-		return nil, err
+		wgErr := ErrWGAgentf("Failed to create WG client: %v", err)
+		s.logAndReportError("WG client creation failed", wgErr, map[string]interface{}{
+			"user_id":    state.UserID,
+			"payment_id": paymentID,
+			"wg_addr":    s.cfg.WGAgentAddr,
+		})
+		return nil, wgErr
 	}
 	defer wgClient.Close()
 
+	slog.Info("WG client created successfully", "user_id", state.UserID)
+
 	peerReq := &wgagent.GeneratePeerConfigRequest{
 		Interface:      "wg0",
-		ServerEndpoint: "vpn.example.com:51820",
+		ServerEndpoint: s.cfg.WGServerEndpoint,
 		DNSServers:     "1.1.1.1, 1.0.0.1",
 		AllowedIPs:     "0.0.0.0/0",
 	}
 
+	slog.Info("Generating peer config", "user_id", state.UserID, "server_endpoint", s.cfg.WGServerEndpoint)
+
 	peerResp, err := wgClient.GeneratePeerConfig(ctx, peerReq)
 	if err != nil {
-		return nil, err
+		wgErr := ErrWGAgentf("Failed to generate peer config: %v", err)
+		s.logAndReportError("Peer config generation failed", wgErr, map[string]interface{}{
+			"user_id":    state.UserID,
+			"payment_id": paymentID,
+			"interface":  "wg0",
+		})
+		return nil, wgErr
 	}
 
-	peerID := fmt.Sprintf("user_%d_%d", state.UserID, time.Now().Unix())
+	slog.Info("Peer config generated", "user_id", state.UserID, "public_key", peerResp.PublicKey[:10]+"...")
+
+	peerID := "user_" + strconv.FormatInt(state.UserID, 10) + "_" + strconv.FormatInt(time.Now().Unix(), 10)
 	addReq := &wgagent.AddPeerRequest{
 		Interface:  "wg0",
 		PublicKey:  peerResp.PublicKey,
@@ -303,10 +389,20 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 		PeerID:     peerID,
 	}
 
+	slog.Info("Adding peer to interface", "user_id", state.UserID, "peer_id", peerID, "allowed_ip", peerResp.AllowedIP)
+
 	_, err = wgClient.AddPeer(ctx, addReq)
 	if err != nil {
-		return nil, err
+		wgErr := ErrWGAgentf("Failed to add peer: %v", err)
+		s.logAndReportError("Peer addition failed", wgErr, map[string]interface{}{
+			"user_id":    state.UserID,
+			"peer_id":    peerID,
+			"public_key": peerResp.PublicKey,
+		})
+		return nil, wgErr
 	}
+
+	slog.Info("Peer added successfully", "user_id", state.UserID, "peer_id", peerID)
 
 	startDate := time.Now()
 	endDate := startDate.AddDate(0, 0, plan.DurationDays)
@@ -326,10 +422,24 @@ func (s *Service) createSubscription(tx *gorm.DB, state *BuyState, plan *db.Plan
 		PaymentID:  &paymentID,
 	}
 
+	slog.Info("Creating subscription in database",
+		"user_id", state.UserID,
+		"peer_id", peerID,
+		"platform", state.Platform,
+		"end_date", endDate.Format("2006-01-02"),
+	)
+
 	if err := tx.Create(subscription).Error; err != nil {
-		return nil, err
+		dbErr := ErrDatabasef("Failed to create subscription: %v", err)
+		s.logAndReportError("Subscription creation failed", dbErr, map[string]interface{}{
+			"user_id":    state.UserID,
+			"peer_id":    peerID,
+			"payment_id": paymentID,
+		})
+		return nil, dbErr
 	}
 
+	slog.Info("Subscription created successfully", "subscription_id", subscription.ID, "user_id", state.UserID)
 	return subscription, nil
 }
 

@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +17,13 @@ import (
 )
 
 func (s *Service) handleAdmins(msg *tgbotapi.Message) {
+	slog.Info("Admin management requested", "user_id", msg.From.ID, "username", msg.From.UserName)
+
 	if !s.isSuperAdmin(msg.From.ID) {
+		s.logAndReportError("Admin access denied", ErrPermission("User attempted admin management without super admin rights"), map[string]interface{}{
+			"user_id":  msg.From.ID,
+			"username": msg.From.UserName,
+		})
 		s.reply(msg.Chat.ID, "У вас нет прав для управления администраторами")
 		return
 	}
@@ -30,11 +38,22 @@ func (s *Service) handleAdmins(msg *tgbotapi.Message) {
 
 	msgConfig := tgbotapi.NewMessage(msg.Chat.ID, "Управление администраторами:")
 	msgConfig.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(keyboard...)
-	s.bot.Send(msgConfig)
+	if _, err := s.bot.Send(msgConfig); err != nil {
+		s.logAndReportError("Failed to send admin menu", err, map[string]interface{}{
+			"chat_id": msg.Chat.ID,
+			"user_id": msg.From.ID,
+		})
+	}
 }
 
 func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
+	slog.Info("Payment queue requested", "user_id", msg.From.ID, "username", msg.From.UserName)
+
 	if !s.isAdmin(msg.From.ID) {
+		s.logAndReportError("Payment queue access denied", ErrPermission("User attempted payment queue access without admin rights"), map[string]interface{}{
+			"user_id":  msg.From.ID,
+			"username": msg.From.UserName,
+		})
 		s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
 		return
 	}
@@ -48,9 +67,16 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 		Find(&payments)
 
 	if result.Error != nil {
+		err := ErrDatabasef("Failed to fetch payment queue: %v", result.Error)
+		s.logAndReportError("Payment queue fetch failed", err, map[string]interface{}{
+			"user_id": msg.From.ID,
+			"error":   result.Error.Error(),
+		})
 		s.reply(msg.Chat.ID, "Ошибка получения очереди платежей")
 		return
 	}
+
+	slog.Info("Payment queue fetched", "count", len(payments), "admin_id", msg.From.ID)
 
 	if len(payments) == 0 {
 		s.reply(msg.Chat.ID, "Очередь платежей пуста")
@@ -61,25 +87,21 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 	var keyboard [][]tgbotapi.InlineKeyboardButton
 
 	for i, payment := range payments {
-		text += fmt.Sprintf("🆔 #%d\n👤 @%s\n💰 %d руб.\n📦 %s x%d\n💳 %s (%s)\n📅 %s\n\n",
-			payment.ID,
-			payment.User.Username,
-			payment.Amount,
-			payment.Plan.Name,
-			payment.Qty,
-			payment.Method.Bank,
-			payment.Method.PhoneNumber,
-			payment.CreatedAt.Format("02.01.2006 15:04"),
-		)
+		text += "🆔 #" + strconv.Itoa(int(payment.ID)) + "\n" +
+			"👤 @" + payment.User.Username + "\n" +
+			"💰 " + strconv.Itoa(payment.Amount) + " руб.\n" +
+			"📦 " + payment.Plan.Name + " x" + strconv.Itoa(payment.Qty) + "\n" +
+			"💳 " + payment.Method.Bank + " (" + payment.Method.PhoneNumber + ")\n" +
+			"📅 " + payment.CreatedAt.Format("02.01.2006 15:04") + "\n\n"
 
 		// Создаем кнопки для одобрения/отклонения
 		buttonRow := []tgbotapi.InlineKeyboardButton{
 			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("✅ #%d", payment.ID),
+				"✅ #"+strconv.Itoa(int(payment.ID)),
 				CallbackPaymentApprove.WithID(payment.ID),
 			),
 			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("❌ #%d", payment.ID),
+				"❌ #"+strconv.Itoa(int(payment.ID)),
 				CallbackPaymentReject.WithID(payment.ID),
 			),
 		}
@@ -95,7 +117,13 @@ func (s *Service) handlePayQueue(msg *tgbotapi.Message) {
 	if len(keyboard) > 0 {
 		msgConfig.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(keyboard...)
 	}
-	s.bot.Send(msgConfig)
+
+	if _, err := s.bot.Send(msgConfig); err != nil {
+		s.logAndReportError("Failed to send payment queue", err, map[string]interface{}{
+			"chat_id":        msg.Chat.ID,
+			"payments_count": len(payments),
+		})
+	}
 }
 
 func (s *Service) handleInfo(msg *tgbotapi.Message) {
@@ -336,27 +364,42 @@ func (s *Service) showAdminList(callback *tgbotapi.CallbackQuery) {
 
 func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
+	slog.Info("Payment callback received", "data", data, "admin_id", callback.From.ID)
 
 	if strings.HasPrefix(data, CallbackPaymentApprove.String()) {
 		paymentIDStr := strings.TrimPrefix(data, CallbackPaymentApprove.String())
 		paymentID, err := strconv.ParseUint(paymentIDStr, 10, 32)
 		if err != nil {
+			validationErr := ErrValidationf("Invalid payment ID format: %v", paymentIDStr)
+			s.logAndReportError("Payment approval failed - invalid ID", validationErr, map[string]interface{}{
+				"payment_id_str": paymentIDStr,
+				"admin_id":       callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Неверный ID платежа")
 			return
 		}
 
+		slog.Info("Approving payment", "payment_id", paymentID, "admin_id", callback.From.ID)
+
 		err = s.approvePayment(uint(paymentID), callback.From.ID)
 		if err != nil {
-			s.answerCallback(callback.ID, fmt.Sprintf("Ошибка: %v", err))
+			s.logAndReportError("Payment approval failed", err, map[string]interface{}{
+				"payment_id": paymentID,
+				"admin_id":   callback.From.ID,
+			})
+
+			s.answerCallback(callback.ID, "Ошибка одобрения платежа")
+			s.reply(callback.Message.Chat.ID, "🚨 Критическая ошибка при одобрении платежа #"+strconv.FormatUint(paymentID, 10)+":\n"+err.Error())
 			return
 		}
 
+		slog.Info("Payment approved successfully", "payment_id", paymentID, "admin_id", callback.From.ID)
 		s.answerCallback(callback.ID, "✅ Платеж одобрен")
 
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
-			"✅ Платеж одобрен",
+			"✅ Платеж #"+strconv.FormatUint(paymentID, 10)+" одобрен администратором",
 		)
 		s.bot.Send(editMsg)
 		return
@@ -366,22 +409,36 @@ func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 		paymentIDStr := strings.TrimPrefix(data, CallbackPaymentReject.String())
 		paymentID, err := strconv.ParseUint(paymentIDStr, 10, 32)
 		if err != nil {
+			validationErr := ErrValidationf("Invalid payment ID format: %v", paymentIDStr)
+			s.logAndReportError("Payment rejection failed - invalid ID", validationErr, map[string]interface{}{
+				"payment_id_str": paymentIDStr,
+				"admin_id":       callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Неверный ID платежа")
 			return
 		}
 
+		slog.Info("Rejecting payment", "payment_id", paymentID, "admin_id", callback.From.ID)
+
 		err = s.rejectPayment(uint(paymentID), callback.From.ID)
 		if err != nil {
-			s.answerCallback(callback.ID, fmt.Sprintf("Ошибка: %v", err))
+			s.logAndReportError("Payment rejection failed", err, map[string]interface{}{
+				"payment_id": paymentID,
+				"admin_id":   callback.From.ID,
+			})
+
+			s.answerCallback(callback.ID, "Ошибка отклонения платежа")
+			s.reply(callback.Message.Chat.ID, "🚨 Ошибка при отклонении платежа #"+strconv.FormatUint(paymentID, 10)+":\n"+err.Error())
 			return
 		}
 
+		slog.Info("Payment rejected successfully", "payment_id", paymentID, "admin_id", callback.From.ID)
 		s.answerCallback(callback.ID, "❌ Платеж отклонен")
 
 		editMsg := tgbotapi.NewEditMessageText(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
-			"❌ Платеж отклонен",
+			"❌ Платеж #"+strconv.FormatUint(paymentID, 10)+" отклонен администратором",
 		)
 		s.bot.Send(editMsg)
 		return
@@ -389,14 +446,17 @@ func (s *Service) handlePaymentCallback(callback *tgbotapi.CallbackQuery) {
 }
 
 func (s *Service) approvePayment(paymentID uint, adminID int64) error {
+	slog.Info("Starting payment approval", "payment_id", paymentID, "admin_id", adminID)
+
 	// Начинаем транзакцию
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
-		return tx.Error
+		return ErrDatabasef("Failed to begin transaction: %v", tx.Error)
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			slog.Error("Payment approval panic", "payment_id", paymentID, "panic", r)
 		}
 	}()
 
@@ -404,61 +464,89 @@ func (s *Service) approvePayment(paymentID uint, adminID int64) error {
 	var payment db.Payment
 	if err := tx.Preload("Plan").First(&payment, paymentID).Error; err != nil {
 		tx.Rollback()
-		return err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrPaymentf("Payment #%v not found", paymentID)
+		}
+		return ErrDatabasef("Failed to fetch payment #%v: %v", paymentID, err)
 	}
+
+	slog.Info("Payment fetched", "payment_id", paymentID, "status", payment.Status, "amount", payment.Amount)
 
 	if payment.Status != PaymentStatusPending.String() {
 		tx.Rollback()
-		return fmt.Errorf("платеж уже обработан")
+		return ErrPaymentf("Payment #%v already processed with status: %v", paymentID, payment.Status)
 	}
 
 	// Обновляем статус платежа
-	result := tx.Model(&payment).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"status":      PaymentStatusApproved.String(),
 		"approved_by": adminID,
-	})
+	}
 
+	result := tx.Model(&payment).Updates(updates)
 	if result.Error != nil {
 		tx.Rollback()
-		return result.Error
+		return ErrDatabasef("Failed to update payment #%v status: %v", paymentID, result.Error)
 	}
+
+	slog.Info("Payment status updated", "payment_id", paymentID, "rows_affected", result.RowsAffected)
 
 	// Создаем подписки для каждого ключа
 	for i := 0; i < payment.Qty; i++ {
+		slog.Info("Creating subscription", "payment_id", paymentID, "subscription", i+1, "of", payment.Qty)
+
 		subscription, err := s.createSubscriptionForPayment(tx, &payment)
 		if err != nil {
 			tx.Rollback()
-			return err
+			return ErrSubscriptionf("Failed to create subscription %v of %v for payment #%v: %v",
+				i+1, payment.Qty, paymentID, err)
 		}
 
 		// Отправляем ключ пользователю
-		s.sendSubscriptionToUser(payment.UserID, subscription)
+		if subscription.PrivKeyEnc == "PLACEHOLDER_PRIVATE_KEY" {
+			slog.Warn("Sending placeholder notification", "payment_id", paymentID, "subscription_id", subscription.ID)
+			s.sendPlaceholderNotification(payment.UserID, subscription)
+		} else {
+			slog.Info("Sending subscription to user", "payment_id", paymentID, "subscription_id", subscription.ID, "user_id", payment.UserID)
+			s.sendSubscriptionToUser(payment.UserID, subscription)
+		}
 	}
 
-	return tx.Commit().Error
+	commitErr := tx.Commit().Error
+	if commitErr != nil {
+		return ErrDatabasef("Failed to commit transaction for payment #%v: %v", paymentID, commitErr)
+	}
+
+	slog.Info("Payment approval completed successfully", "payment_id", paymentID, "admin_id", adminID)
+	return nil
 }
 
 func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
+	slog.Info("Starting payment rejection", "payment_id", paymentID, "admin_id", adminID)
 
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
-		return tx.Error
+		return ErrDatabasef("Failed to begin transaction: %v", tx.Error)
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			slog.Error("Payment rejection panic", "payment_id", paymentID, "panic", r)
 		}
 	}()
 
 	var payment db.Payment
 	if err := tx.First(&payment, paymentID).Error; err != nil {
 		tx.Rollback()
-		return err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrPaymentf("Payment #%v not found", paymentID)
+		}
+		return ErrDatabasef("Failed to fetch payment #%v: %v", paymentID, err)
 	}
 
 	if payment.Status != "pending" {
 		tx.Rollback()
-		return fmt.Errorf("платеж уже обработан")
+		return ErrPaymentf("Payment #%v already processed with status: %v", paymentID, payment.Status)
 	}
 
 	// Обновляем статус платежа
@@ -467,20 +555,30 @@ func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
 
 	if err := tx.Save(&payment).Error; err != nil {
 		tx.Rollback()
-		return err
+		return ErrDatabasef("Failed to save rejected payment #%v: %v", paymentID, err)
 	}
 
+	// Отключаем связанные подписки если есть
 	var subscriptions []db.Subscription
 	tx.Where("payment_id = ?", paymentID).Find(&subscriptions)
 
 	for _, sub := range subscriptions {
+		slog.Info("Disabling subscription", "payment_id", paymentID, "subscription_id", sub.ID, "peer_id", sub.PeerID)
 
-		s.disablePeer(sub.Interface, sub.PublicKey)
+		if err := s.disablePeer(sub.Interface, sub.PublicKey); err != nil {
+			slog.Error("Failed to disable peer", "peer_id", sub.PeerID, "error", err)
+		}
 
 		tx.Model(&sub).Update("active", false)
 	}
 
-	return tx.Commit().Error
+	commitErr := tx.Commit().Error
+	if commitErr != nil {
+		return ErrDatabasef("Failed to commit rejection transaction for payment #%v: %v", paymentID, commitErr)
+	}
+
+	slog.Info("Payment rejection completed", "payment_id", paymentID, "admin_id", adminID)
+	return nil
 }
 
 func (s *Service) showAddAdminForm(callback *tgbotapi.CallbackQuery) {
@@ -684,7 +782,8 @@ func (s *Service) handleAddAdmin(msg *tgbotapi.Message) {
 }
 
 func (s *Service) createSubscriptionForPayment(tx *gorm.DB, payment *db.Payment) (*db.Subscription, error) {
-	// Создаем конфигурацию WireGuard
+	slog.Info("Creating subscription for payment", "payment_id", payment.ID, "user_id", payment.UserID, "plan_id", payment.PlanID)
+
 	ctx := context.Background()
 
 	wgConfig := wgagent.Config{
@@ -693,38 +792,91 @@ func (s *Service) createSubscriptionForPayment(tx *gorm.DB, payment *db.Payment)
 		KeyFile:  s.cfg.WGClientKey,
 		CAFile:   s.cfg.WGCACert,
 	}
+
+	// Проверяем, есть ли сертификаты для secure соединения
+	if s.cfg.WGClientCert == "" || s.cfg.WGClientKey == "" || s.cfg.WGCACert == "" {
+		slog.Warn("WG certificates not configured, using insecure connection", "wg_addr", s.cfg.WGAgentAddr)
+		wgConfig = wgagent.Config{
+			Addr: s.cfg.WGAgentAddr,
+		}
+	} else {
+		slog.Info("Using secure WG connection with certificates")
+	}
+
+	var peerResp *wgagent.GeneratePeerConfigResponse
+	var peerID string
+
 	wgClient, err := wgagent.NewClient(wgConfig)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка создания WG клиента: %w", err)
-	}
-	defer wgClient.Close()
+		// Если WG Agent недоступен, создаем placeholder подписку
+		slog.Error("WG Agent unavailable, creating placeholder subscription",
+			"error", err,
+			"payment_id", payment.ID,
+			"wg_addr", s.cfg.WGAgentAddr,
+		)
 
-	// Генерируем конфигурацию пира
-	peerReq := &wgagent.GeneratePeerConfigRequest{
-		Interface:      "wg0",
-		ServerEndpoint: s.cfg.WGServerEndpoint,
-		DNSServers:     "1.1.1.1, 1.0.0.1",
-		AllowedIPs:     "0.0.0.0/0",
-	}
+		s.logAndReportError("WG Agent connection failed", ErrWGAgentf("WG Agent unavailable: %v", err), map[string]interface{}{
+			"payment_id": payment.ID,
+			"user_id":    payment.UserID,
+			"wg_addr":    s.cfg.WGAgentAddr,
+		})
 
-	peerResp, err := wgClient.GeneratePeerConfig(ctx, peerReq)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка генерации конфигурации пира: %w", err)
-	}
+		peerID = "user_" + strconv.FormatInt(payment.UserID, 10) + "_" + strconv.FormatInt(time.Now().Unix(), 10)
+		peerResp = &wgagent.GeneratePeerConfigResponse{
+			PrivateKey: "PLACEHOLDER_PRIVATE_KEY",
+			PublicKey:  "PLACEHOLDER_PUBLIC_KEY",
+			AllowedIP:  "10.0.0.1", // placeholder IP
+		}
+	} else {
+		defer wgClient.Close()
+		slog.Info("WG Agent connected successfully", "payment_id", payment.ID)
 
-	// Добавляем пира к интерфейсу
-	peerID := fmt.Sprintf("user_%d_%d", payment.UserID, time.Now().Unix())
-	addReq := &wgagent.AddPeerRequest{
-		Interface:  "wg0",
-		PublicKey:  peerResp.PublicKey,
-		AllowedIP:  peerResp.AllowedIP,
-		KeepaliveS: 25,
-		PeerID:     peerID,
-	}
+		// Генерируем конфигурацию пира
+		peerReq := &wgagent.GeneratePeerConfigRequest{
+			Interface:      "wg0",
+			ServerEndpoint: s.cfg.WGServerEndpoint,
+			DNSServers:     "1.1.1.1, 1.0.0.1",
+			AllowedIPs:     "0.0.0.0/0",
+		}
 
-	_, err = wgClient.AddPeer(ctx, addReq)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка добавления пира: %w", err)
+		slog.Info("Generating peer config", "payment_id", payment.ID, "server_endpoint", s.cfg.WGServerEndpoint)
+
+		peerResp, err = wgClient.GeneratePeerConfig(ctx, peerReq)
+		if err != nil {
+			s.logAndReportError("WG peer config generation failed", err, map[string]interface{}{
+				"payment_id": payment.ID,
+				"user_id":    payment.UserID,
+				"interface":  "wg0",
+			})
+			return nil, ErrWGAgentf("Failed to generate peer config: %v", err)
+		}
+
+		slog.Info("Peer config generated", "payment_id", payment.ID, "public_key", peerResp.PublicKey[:10]+"...")
+
+		// Добавляем пира к интерфейсу
+		peerID = "user_" + strconv.FormatInt(payment.UserID, 10) + "_" + strconv.FormatInt(time.Now().Unix(), 10)
+		addReq := &wgagent.AddPeerRequest{
+			Interface:  "wg0",
+			PublicKey:  peerResp.PublicKey,
+			AllowedIP:  peerResp.AllowedIP,
+			KeepaliveS: 25,
+			PeerID:     peerID,
+		}
+
+		slog.Info("Adding peer to interface", "payment_id", payment.ID, "peer_id", peerID, "allowed_ip", peerResp.AllowedIP)
+
+		_, err = wgClient.AddPeer(ctx, addReq)
+		if err != nil {
+			s.logAndReportError("WG peer addition failed", err, map[string]interface{}{
+				"payment_id": payment.ID,
+				"user_id":    payment.UserID,
+				"peer_id":    peerID,
+				"public_key": peerResp.PublicKey,
+			})
+			return nil, ErrWGAgentf("Failed to add peer to interface: %v", err)
+		}
+
+		slog.Info("Peer added successfully", "payment_id", payment.ID, "peer_id", peerID)
 	}
 
 	// Создаем подписку
@@ -742,13 +894,44 @@ func (s *Service) createSubscriptionForPayment(tx *gorm.DB, payment *db.Payment)
 		Platform:   "generic", // Платформа будет установлена позже
 		StartDate:  startDate,
 		EndDate:    endDate,
-		Active:     true,
+		Active:     peerResp.PrivateKey != "PLACEHOLDER_PRIVATE_KEY", // Отключаем если placeholder
 		PaymentID:  &payment.ID,
 	}
 
+	slog.Info("Creating subscription in database",
+		"payment_id", payment.ID,
+		"peer_id", peerID,
+		"start_date", startDate.Format("2006-01-02"),
+		"end_date", endDate.Format("2006-01-02"),
+		"active", subscription.Active,
+	)
+
 	if err := tx.Create(subscription).Error; err != nil {
-		return nil, fmt.Errorf("ошибка создания подписки в БД: %w", err)
+		s.logAndReportError("Subscription database creation failed", err, map[string]interface{}{
+			"payment_id": payment.ID,
+			"user_id":    payment.UserID,
+			"peer_id":    peerID,
+		})
+		return nil, ErrDatabasef("Failed to create subscription in database: %v", err)
 	}
 
+	slog.Info("Subscription created successfully", "subscription_id", subscription.ID, "payment_id", payment.ID)
 	return subscription, nil
+}
+
+func (s *Service) sendPlaceholderNotification(chatID int64, subscription *db.Subscription) {
+	text := fmt.Sprintf(`⚠️ Ваш платеж одобрен!
+
+📋 ID: %s
+📅 Действует до: %s
+
+🔧 Конфигурация VPN временно недоступна из-за технических работ.
+Ключи будут высланы в течение нескольких часов.
+
+Спасибо за понимание! 🙏`,
+		subscription.PeerID,
+		subscription.EndDate.Format("02.01.2006"),
+	)
+
+	s.reply(chatID, text)
 }

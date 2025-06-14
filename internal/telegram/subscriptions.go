@@ -2,13 +2,17 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"strings"
 
 	"lime-bot/internal/db"
 	"lime-bot/internal/gates/wgagent"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"gorm.io/gorm"
 )
 
 func (s *Service) handleMyKeys(msg *tgbotapi.Message) {
@@ -61,7 +65,13 @@ func (s *Service) handleMyKeys(msg *tgbotapi.Message) {
 }
 
 func (s *Service) handleDisable(msg *tgbotapi.Message) {
+	slog.Info("Disable subscription requested", "admin_id", msg.From.ID, "username", msg.From.UserName)
+
 	if !s.isAdmin(msg.From.ID) {
+		s.logAndReportError("Disable access denied", ErrPermission("User attempted disable without admin rights"), map[string]interface{}{
+			"user_id":  msg.From.ID,
+			"username": msg.From.UserName,
+		})
 		s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
 		return
 	}
@@ -73,38 +83,72 @@ func (s *Service) handleDisable(msg *tgbotapi.Message) {
 	}
 
 	username := args[0]
+	slog.Info("Processing disable request", "target_username", username, "admin_id", msg.From.ID)
 
 	var user db.User
-	result := s.repo.DB().Where("username LIKE ?", "%"+username+"%").First(&user)
+	result := s.repo.DB().Where("username = ?", username).First(&user)
 	if result.Error != nil {
-		s.reply(msg.Chat.ID, "Пользователь не найден")
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			userErr := ErrUserNotFoundf("User %v not found", username)
+			s.logAndReportError("User not found for disable", userErr, map[string]interface{}{
+				"target_username": username,
+				"admin_id":        msg.From.ID,
+			})
+			s.reply(msg.Chat.ID, "Пользователь не найден: @"+username)
+			return
+		}
+
+		dbErr := ErrDatabasef("Failed to find user %v: %v", username, result.Error)
+		s.logAndReportError("Database error during user lookup", dbErr, map[string]interface{}{
+			"target_username": username,
+			"admin_id":        msg.From.ID,
+		})
+		s.reply(msg.Chat.ID, "Ошибка поиска пользователя")
 		return
 	}
 
 	var subscriptions []db.Subscription
 	result = s.repo.DB().Where("user_id = ? AND active = true", user.TgID).Find(&subscriptions)
 	if result.Error != nil {
-		s.reply(msg.Chat.ID, "Ошибка получения подписок")
+		dbErr := ErrDatabasef("Failed to fetch user subscriptions: %v", result.Error)
+		s.logAndReportError("Failed to fetch subscriptions for disable", dbErr, map[string]interface{}{
+			"target_user_id": user.TgID,
+			"admin_id":       msg.From.ID,
+		})
+		s.reply(msg.Chat.ID, "Ошибка получения подписок пользователя")
 		return
 	}
 
 	if len(subscriptions) == 0 {
-		s.reply(msg.Chat.ID, "У пользователя нет активных подписок")
+		s.reply(msg.Chat.ID, "У пользователя @"+username+" нет активных подписок")
 		return
 	}
 
+	slog.Info("Disabling user subscriptions", "target_user_id", user.TgID, "subscriptions_count", len(subscriptions))
+
 	disabled := 0
 	for _, sub := range subscriptions {
-		err := s.disablePeer(sub.Interface, sub.PublicKey)
-		if err != nil {
+		slog.Info("Disabling subscription", "subscription_id", sub.ID, "peer_id", sub.PeerID)
+
+		if err := s.disablePeer(sub.Interface, sub.PublicKey); err != nil {
+			slog.Error("Failed to disable peer", "subscription_id", sub.ID, "error", err)
 			continue
 		}
 
-		s.repo.DB().Model(&sub).Update("active", false)
+		if err := s.repo.DB().Model(&sub).Update("active", false).Error; err != nil {
+			dbErr := ErrDatabasef("Failed to update subscription status: %v", err)
+			s.logAndReportError("Subscription status update failed", dbErr, map[string]interface{}{
+				"subscription_id": sub.ID,
+				"admin_id":        msg.From.ID,
+			})
+			continue
+		}
+
 		disabled++
 	}
 
-	s.reply(msg.Chat.ID, fmt.Sprintf("✅ Отключено %d подписок пользователя %s", disabled, username))
+	slog.Info("User subscriptions disabled", "target_user_id", user.TgID, "disabled_count", disabled, "admin_id", msg.From.ID)
+	s.reply(msg.Chat.ID, "✅ Отключено "+strconv.Itoa(disabled)+" подписок для @"+username)
 }
 
 func (s *Service) handleEnable(msg *tgbotapi.Message) {
@@ -219,6 +263,8 @@ func (s *Service) sendQRForPeer(callback *tgbotapi.CallbackQuery, peerID string)
 }
 
 func (s *Service) disablePeer(interfaceName, publicKey string) error {
+	slog.Info("Disabling peer", "interface", interfaceName, "public_key", publicKey[:10]+"...")
+
 	ctx := context.Background()
 
 	wgConfig := wgagent.Config{
@@ -227,9 +273,23 @@ func (s *Service) disablePeer(interfaceName, publicKey string) error {
 		KeyFile:  s.cfg.WGClientKey,
 		CAFile:   s.cfg.WGCACert,
 	}
+
+	if s.cfg.WGClientCert == "" || s.cfg.WGClientKey == "" || s.cfg.WGCACert == "" {
+		slog.Warn("WG certificates not configured for disable operation")
+		wgConfig = wgagent.Config{
+			Addr: s.cfg.WGAgentAddr,
+		}
+	}
+
 	wgClient, err := wgagent.NewClient(wgConfig)
 	if err != nil {
-		return fmt.Errorf("ошибка создания WG клиента: %w", err)
+		wgErr := ErrWGAgentf("Failed to create WG client for disable: %v", err)
+		s.logAndReportError("WG client creation failed for disable", wgErr, map[string]interface{}{
+			"interface":  interfaceName,
+			"public_key": publicKey,
+			"wg_addr":    s.cfg.WGAgentAddr,
+		})
+		return wgErr
 	}
 	defer wgClient.Close()
 
@@ -238,10 +298,23 @@ func (s *Service) disablePeer(interfaceName, publicKey string) error {
 		PublicKey: publicKey,
 	}
 
-	return wgClient.DisablePeer(ctx, req)
+	err = wgClient.DisablePeer(ctx, req)
+	if err != nil {
+		wgErr := ErrWGAgentf("Failed to disable peer: %v", err)
+		s.logAndReportError("Peer disable operation failed", wgErr, map[string]interface{}{
+			"interface":  interfaceName,
+			"public_key": publicKey,
+		})
+		return wgErr
+	}
+
+	slog.Info("Peer disabled successfully", "interface", interfaceName, "public_key", publicKey[:10]+"...")
+	return nil
 }
 
 func (s *Service) enablePeer(interfaceName, publicKey string) error {
+	slog.Info("Enabling peer", "interface", interfaceName, "public_key", publicKey[:10]+"...")
+
 	ctx := context.Background()
 
 	wgConfig := wgagent.Config{
@@ -250,9 +323,23 @@ func (s *Service) enablePeer(interfaceName, publicKey string) error {
 		KeyFile:  s.cfg.WGClientKey,
 		CAFile:   s.cfg.WGCACert,
 	}
+
+	if s.cfg.WGClientCert == "" || s.cfg.WGClientKey == "" || s.cfg.WGCACert == "" {
+		slog.Warn("WG certificates not configured for enable operation")
+		wgConfig = wgagent.Config{
+			Addr: s.cfg.WGAgentAddr,
+		}
+	}
+
 	wgClient, err := wgagent.NewClient(wgConfig)
 	if err != nil {
-		return fmt.Errorf("ошибка создания WG клиента: %w", err)
+		wgErr := ErrWGAgentf("Failed to create WG client for enable: %v", err)
+		s.logAndReportError("WG client creation failed for enable", wgErr, map[string]interface{}{
+			"interface":  interfaceName,
+			"public_key": publicKey,
+			"wg_addr":    s.cfg.WGAgentAddr,
+		})
+		return wgErr
 	}
 	defer wgClient.Close()
 
@@ -261,5 +348,16 @@ func (s *Service) enablePeer(interfaceName, publicKey string) error {
 		PublicKey: publicKey,
 	}
 
-	return wgClient.EnablePeer(ctx, req)
+	err = wgClient.EnablePeer(ctx, req)
+	if err != nil {
+		wgErr := ErrWGAgentf("Failed to enable peer: %v", err)
+		s.logAndReportError("Peer enable operation failed", wgErr, map[string]interface{}{
+			"interface":  interfaceName,
+			"public_key": publicKey,
+		})
+		return wgErr
+	}
+
+	slog.Info("Peer enabled successfully", "interface", interfaceName, "public_key", publicKey[:10]+"...")
+	return nil
 }

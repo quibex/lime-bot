@@ -20,42 +20,55 @@ type Service struct {
 }
 
 func New(cfg *config.Config, repo *db.Repository) (*Service, error) {
+	slog.Info("Creating Telegram bot service", "bot_token_length", len(cfg.BotToken))
+
+	if cfg.BotToken == "" {
+		return nil, ErrConfigf("Bot token is empty")
+	}
+
 	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
-		return nil, err
+		return nil, ErrNetworkf("Failed to create bot API: %v", err)
 	}
 	bot.Debug = false
+
+	slog.Info("Bot API created successfully", "bot_username", bot.Self.UserName)
 
 	// Удаляем webhook чтобы использовать long-polling
 	_, err = bot.Request(tgbotapi.DeleteWebhookConfig{})
 	if err != nil {
-		slog.Warn("Не удалось удалить webhook", "error", err)
+		slog.Warn("Failed to delete webhook", "error", err)
 	} else {
-		slog.Info("Webhook удален, переключились на long-polling")
+		slog.Info("Webhook deleted, switched to long-polling")
 	}
 
-	slog.Info("Авторизован как телеграм бот", "username", bot.Self.UserName)
+	slog.Info("Authorized as telegram bot", "username", bot.Self.UserName)
 
 	service := &Service{bot: bot, repo: repo, cfg: cfg}
 
 	// Устанавливаем меню команд
-	err = service.setCommands()
-	if err != nil {
-		slog.Warn("Не удалось установить меню команд", "error", err)
+	if err := service.setCommands(); err != nil {
+		slog.Warn("Failed to set command menu", "error", err)
+	} else {
+		slog.Info("Command menu set successfully")
 	}
 
 	return service, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
+	slog.Info("Starting Telegram bot service")
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
 	updates := s.bot.GetUpdatesChan(u)
+	slog.Info("Listening for Telegram updates")
 
 	for {
 		select {
 		case <-ctx.Done():
+			slog.Info("Bot service stopped by context")
 			return ctx.Err()
 		case upd := <-updates:
 			s.handleUpdate(upd)
@@ -65,11 +78,40 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) handleUpdate(upd tgbotapi.Update) {
 	if upd.Message != nil {
+		slog.Debug("Received message",
+			"user_id", upd.Message.From.ID,
+			"username", upd.Message.From.UserName,
+			"chat_id", upd.Message.Chat.ID,
+			"is_command", upd.Message.IsCommand(),
+		)
+
+		// Создаем или обновляем пользователя в БД
 		user := &db.User{
 			TgID:     upd.Message.From.ID,
 			Username: upd.Message.From.UserName,
 		}
-		s.repo.DB().FirstOrCreate(user, "tg_id = ?", upd.Message.From.ID)
+
+		result := s.repo.DB().FirstOrCreate(user, "tg_id = ?", upd.Message.From.ID)
+		if result.Error != nil {
+			s.logAndReportError("User creation/update failed", result.Error, map[string]interface{}{
+				"user_id":  upd.Message.From.ID,
+				"username": upd.Message.From.UserName,
+			})
+		} else if result.RowsAffected > 0 {
+			slog.Info("New user registered", "user_id", upd.Message.From.ID, "username", upd.Message.From.UserName)
+		}
+
+		// Обновляем username если он изменился
+		if user.Username != upd.Message.From.UserName {
+			user.Username = upd.Message.From.UserName
+			if err := s.repo.DB().Save(user).Error; err != nil {
+				s.logAndReportError("Username update failed", err, map[string]interface{}{
+					"user_id":      upd.Message.From.ID,
+					"old_username": user.Username,
+					"new_username": upd.Message.From.UserName,
+				})
+			}
+		}
 
 		if upd.Message.IsCommand() {
 			s.handleCommand(upd.Message)
@@ -80,6 +122,10 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 	}
 
 	if upd.CallbackQuery != nil {
+		slog.Debug("Received callback query",
+			"user_id", upd.CallbackQuery.From.ID,
+			"data", upd.CallbackQuery.Data,
+		)
 		s.handleCallbackQuery(upd.CallbackQuery)
 		return
 	}
@@ -87,6 +133,7 @@ func (s *Service) handleUpdate(upd tgbotapi.Update) {
 
 func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
+	slog.Info("Processing callback", "data", data, "user_id", callback.From.ID)
 
 	if strings.HasPrefix(data, CallbackBuyPlan.String()) ||
 		strings.HasPrefix(data, CallbackBuyPlatform.String()) ||
@@ -118,16 +165,27 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		planIDStr := strings.TrimPrefix(data, CallbackArchivePlan.String())
 		planID, err := strconv.ParseUint(planIDStr, 10, 32)
 		if err != nil {
+			s.logAndReportError("Invalid plan ID for archive", ErrValidationf("Invalid plan ID: %v", planIDStr), map[string]interface{}{
+				"plan_id_str": planIDStr,
+				"user_id":     callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Неверный ID тарифа")
 			return
 		}
 
+		slog.Info("Archiving plan", "plan_id", planID, "admin_id", callback.From.ID)
+
 		result := s.repo.DB().Model(&db.Plan{}).Where("id = ?", planID).Update("archived", true)
 		if result.Error != nil {
+			s.logAndReportError("Plan archive failed", result.Error, map[string]interface{}{
+				"plan_id":  planID,
+				"admin_id": callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Ошибка архивирования")
 			return
 		}
 
+		slog.Info("Plan archived successfully", "plan_id", planID, "admin_id", callback.From.ID)
 		s.answerCallback(callback.ID, "Тариф архивирован")
 
 		editMsg := tgbotapi.NewEditMessageText(
@@ -143,16 +201,27 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		methodIDStr := strings.TrimPrefix(data, CallbackArchiveMethod.String())
 		methodID, err := strconv.ParseUint(methodIDStr, 10, 32)
 		if err != nil {
+			s.logAndReportError("Invalid method ID for archive", ErrValidationf("Invalid method ID: %v", methodIDStr), map[string]interface{}{
+				"method_id_str": methodIDStr,
+				"user_id":       callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Неверный ID метода")
 			return
 		}
 
+		slog.Info("Archiving payment method", "method_id", methodID, "admin_id", callback.From.ID)
+
 		result := s.repo.DB().Model(&db.PaymentMethod{}).Where("id = ?", methodID).Update("archived", true)
 		if result.Error != nil {
+			s.logAndReportError("Payment method archive failed", result.Error, map[string]interface{}{
+				"method_id": methodID,
+				"admin_id":  callback.From.ID,
+			})
 			s.answerCallback(callback.ID, "Ошибка архивирования")
 			return
 		}
 
+		slog.Info("Payment method archived successfully", "method_id", methodID, "admin_id", callback.From.ID)
 		s.answerCallback(callback.ID, "Способ оплаты архивирован")
 
 		editMsg := tgbotapi.NewEditMessageText(
@@ -163,19 +232,28 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		s.bot.Send(editMsg)
 		return
 	}
+
+	slog.Warn("Unknown callback data received", "data", data, "user_id", callback.From.ID)
 }
 
 func (s *Service) handleCommand(msg *tgbotapi.Message) {
 	cmd := Command(msg.Command())
+	slog.Info("Command received", "command", cmd, "user_id", msg.From.ID, "username", msg.From.UserName)
 
 	// Проверяем валидность команды
 	if !cmd.IsValid() {
+		slog.Warn("Invalid command received", "command", cmd, "user_id", msg.From.ID)
 		s.handleUnknown(msg)
 		return
 	}
 
 	// Проверяем права для админских команд
 	if cmd.IsAdminOnly() && !s.isAdmin(msg.From.ID) {
+		s.logAndReportError("Unauthorized admin command", ErrPermission("Non-admin user attempted admin command"), map[string]interface{}{
+			"command":  string(cmd),
+			"user_id":  msg.From.ID,
+			"username": msg.From.UserName,
+		})
 		s.reply(msg.Chat.ID, "У вас нет прав для этой команды")
 		return
 	}
