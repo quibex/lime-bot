@@ -102,6 +102,9 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	}
 
 	if strings.HasPrefix(data, CallbackAdminList.String()) ||
+		strings.HasPrefix(data, CallbackAdminAdd.String()) ||
+		strings.HasPrefix(data, CallbackAdminDisable.String()) ||
+		strings.HasPrefix(data, CallbackAdminCashier.String()) ||
 		strings.HasPrefix(data, CallbackPaymentApprove.String()) ||
 		strings.HasPrefix(data, CallbackPaymentReject.String()) ||
 		strings.HasPrefix(data, CallbackInfoUser.String()) ||
@@ -220,6 +223,19 @@ func (s *Service) handleCommand(msg *tgbotapi.Message) {
 }
 
 func (s *Service) handleStart(msg *tgbotapi.Message) {
+	// Создаем или обновляем пользователя в БД
+	user := &db.User{
+		TgID:     msg.From.ID,
+		Username: msg.From.UserName,
+	}
+	s.repo.DB().FirstOrCreate(user, "tg_id = ?", msg.From.ID)
+
+	// Обновляем username если он изменился
+	if user.Username != msg.From.UserName {
+		user.Username = msg.From.UserName
+		s.repo.DB().Save(user)
+	}
+
 	text := `Добро пожаловать в Lime VPN! 🍋
 
 Доступные команды:

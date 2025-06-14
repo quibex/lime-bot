@@ -123,10 +123,21 @@ func (s *Service) handleFeedbackMessage(msg *tgbotapi.Message) {
 }
 
 func (s *Service) handleStartWithRef(msg *tgbotapi.Message) {
+	// Всегда создаем или обновляем пользователя в БД
+	user := &db.User{
+		TgID:     msg.From.ID,
+		Username: msg.From.UserName,
+	}
+	s.repo.DB().FirstOrCreate(user, "tg_id = ?", msg.From.ID)
+
+	// Обновляем username если он изменился
+	if user.Username != msg.From.UserName {
+		user.Username = msg.From.UserName
+		s.repo.DB().Save(user)
+	}
 
 	args := msg.CommandArguments()
 	if !startsWith(args, "ref_") {
-
 		s.handleStart(msg)
 		return
 	}
@@ -145,12 +156,6 @@ func (s *Service) handleStartWithRef(msg *tgbotapi.Message) {
 		s.handleStart(msg)
 		return
 	}
-
-	user := &db.User{
-		TgID:     msg.From.ID,
-		Username: msg.From.UserName,
-	}
-	s.repo.DB().FirstOrCreate(user, "tg_id = ?", msg.From.ID)
 
 	var existingReferral db.Referral
 	result = s.repo.DB().Where("inviter_id = ? AND invitee_id = ?", inviter.TgID, user.TgID).First(&existingReferral)

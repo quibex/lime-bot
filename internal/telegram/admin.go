@@ -646,7 +646,7 @@ func (s *Service) handleAddAdmin(msg *tgbotapi.Message) {
 
 	// Проверяем валидность роли
 	if !role.IsValid() {
-		s.reply(msg.Chat.ID, "Неверная роль. Доступные: super, cashier, support")
+		s.reply(msg.Chat.ID, "Неверная роль. Доступные: super, admin, cashier, support")
 		return
 	}
 
@@ -654,7 +654,7 @@ func (s *Service) handleAddAdmin(msg *tgbotapi.Message) {
 	var user db.User
 	result := s.repo.DB().Where("username = ?", username).First(&user)
 	if result.Error != nil {
-		s.reply(msg.Chat.ID, "Пользователь не найден")
+		s.reply(msg.Chat.ID, fmt.Sprintf("Пользователь @%s не найден.\n\nПользователь должен сначала написать боту командой /start", username))
 		return
 	}
 
@@ -675,7 +675,7 @@ func (s *Service) handleAddAdmin(msg *tgbotapi.Message) {
 
 	result = s.repo.DB().Create(admin)
 	if result.Error != nil {
-		s.reply(msg.Chat.ID, "Ошибка добавления администратора")
+		s.handleError(msg.Chat.ID, ErrDatabasef("Failed to create admin: %v", result.Error))
 		return
 	}
 
