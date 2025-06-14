@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"gorm.io/gorm"
@@ -61,14 +62,26 @@ func recreateSQLiteTableWithConstraint(db *gorm.DB, table, column, allowedList, 
 		}
 
 		// Удаляем старый CHECK (если был) и добавляем новый
-		// Простой способ: убираем строку с CHECK и добавляем свежую
 		newCheck := fmt.Sprintf("CHECK (%s IN (%s))", column, allowedList)
-		schema = strings.ReplaceAll(schema, constraint, "")
+
+		// Удаляем существующий constraint полностью
+		re := regexp.MustCompile(
+			fmt.Sprintf(
+				",?\\s*CONSTRAINT `?%s`? CHECK \\([^)]*\\)\\)",
+				regexp.QuoteMeta(constraint),
+			),
+		)
+		schema = re.ReplaceAllString(schema, "")
 
 		// Создаем временную таблицу
 		tmp := table + "_new"
 		createSQL := strings.Replace(schema, table, tmp, 1)
-		createSQL = strings.Replace(createSQL, ")", ", "+newCheck+")", 1)
+
+		if idx := strings.LastIndex(createSQL, ")"); idx != -1 {
+			createSQL = createSQL[:idx] + ", " + newCheck + createSQL[idx:]
+		} else {
+			return fmt.Errorf("invalid table schema for %s", table)
+		}
 		if err := tx.Exec(createSQL).Error; err != nil {
 			return err
 		}
