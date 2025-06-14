@@ -1,6 +1,7 @@
 package db
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -13,6 +14,8 @@ type Repository struct {
 }
 
 func NewRepository(dsn string) (*Repository, error) {
+	slog.Info("Инициализация репозитория", "dsn", dsn)
+
 	dir := filepath.Dir(dsn)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
