@@ -491,24 +491,26 @@ func (s *Service) approvePayment(paymentID uint, adminID int64) error {
 
 	slog.Info("Payment status updated", "payment_id", paymentID, "rows_affected", result.RowsAffected)
 
-	// Создаем подписки для каждого ключа
-	for i := 0; i < payment.Qty; i++ {
-		slog.Info("Creating subscription", "payment_id", paymentID, "subscription", i+1, "of", payment.Qty)
+	var subs []db.Subscription
+	tx.Where("payment_id = ?", paymentID).Find(&subs)
 
-		subscription, err := s.createSubscriptionForPayment(tx, &payment)
-		if err != nil {
-			tx.Rollback()
-			return ErrSubscriptionf("Failed to create subscription %v of %v for payment #%v: %v",
-				i+1, payment.Qty, paymentID, err)
+	if len(subs) == 0 {
+		for i := 0; i < payment.Qty; i++ {
+			subscription, err := s.createSubscriptionForPayment(tx, &payment)
+			if err != nil {
+				tx.Rollback()
+				return ErrSubscriptionf("Failed to create subscription %v of %v for payment #%v: %v",
+					i+1, payment.Qty, paymentID, err)
+			}
+			subs = append(subs, *subscription)
 		}
+	}
 
-		// Отправляем ключ пользователю
-		if subscription.PrivKeyEnc == "PLACEHOLDER_PRIVATE_KEY" {
-			slog.Warn("Sending placeholder notification", "payment_id", paymentID, "subscription_id", subscription.ID)
-			s.sendPlaceholderNotification(payment.UserID, subscription)
+	for _, sub := range subs {
+		if sub.PrivKeyEnc == "PLACEHOLDER_PRIVATE_KEY" {
+			s.sendPlaceholderNotification(payment.UserID, &sub)
 		} else {
-			slog.Info("Sending subscription to user", "payment_id", paymentID, "subscription_id", subscription.ID, "user_id", payment.UserID)
-			s.sendSubscriptionToUser(payment.UserID, subscription)
+			s.sendSubscriptionToUserWithData(payment.UserID, &sub, "", "")
 		}
 	}
 
