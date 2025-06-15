@@ -248,6 +248,22 @@ func (s *Service) sendUserInfo(chatID int64, userID int64) {
 func (s *Service) handleAdminCallback(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 
+	// Обработка новых админских коллбеков
+	switch data {
+	case "admin_payqueue":
+		s.handleCallbackPayQueue(callback)
+		return
+	case "admin_plans":
+		s.handleCallbackAdminPlans(callback)
+		return
+	case "admin_methods":
+		s.handleCallbackAdminMethods(callback)
+		return
+	case "admin_users":
+		s.handleCallbackAdminUsers(callback)
+		return
+	}
+
 	if data == CallbackAdminList.String() || data == CallbackAdminAdd.String() || data == CallbackAdminDisable.String() || data == CallbackAdminCashier.String() {
 		s.handleAdminManagementCallback(callback)
 		return
@@ -977,4 +993,127 @@ func (s *Service) sendPlaceholderNotification(chatID int64, subscription *db.Sub
 	)
 
 	s.reply(chatID, text)
+}
+
+func (s *Service) handleCallbackPayQueue(callback *tgbotapi.CallbackQuery) {
+	if !s.isAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав администратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	var payments []db.Payment
+	result := s.repo.DB().Where("status = 'pending'").
+		Preload("User").
+		Preload("Plan").
+		Preload("Method").
+		Order("created_at ASC").
+		Find(&payments)
+
+	if result.Error != nil {
+		s.editMessageText(callback.Message.Chat.ID, callback.Message.MessageID, "Ошибка получения очереди платежей")
+		return
+	}
+
+	if len(payments) == 0 {
+		text := "💳 Очередь платежей пуста"
+		keyboard := [][]tgbotapi.InlineKeyboardButton{
+			{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад к админ панели", CallbackAdminPanel.String())},
+		}
+		s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+		return
+	}
+
+	text := "💳 Очередь платежей на проверку:\n\n"
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	for i, payment := range payments {
+		text += "🆔 #" + strconv.Itoa(int(payment.ID)) + "\n" +
+			"👤 @" + payment.User.Username + "\n" +
+			"💰 " + strconv.Itoa(payment.Amount) + " руб.\n" +
+			"📦 " + payment.Plan.Name + " x" + strconv.Itoa(payment.Qty) + "\n" +
+			"💳 " + payment.Method.Bank + " (" + payment.Method.PhoneNumber + ")\n" +
+			"📅 " + payment.CreatedAt.Format("02.01.2006 15:04") + "\n\n"
+
+		buttonRow := []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData(
+				"✅ #"+strconv.Itoa(int(payment.ID)),
+				CallbackPaymentApprove.WithID(payment.ID),
+			),
+			tgbotapi.NewInlineKeyboardButtonData(
+				"❌ #"+strconv.Itoa(int(payment.ID)),
+				CallbackPaymentReject.WithID(payment.ID),
+			),
+		}
+		keyboard = append(keyboard, buttonRow)
+
+		if i >= 4 {
+			text += "...и еще платежи\n"
+			break
+		}
+	}
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("🔙 Назад к админ панели", CallbackAdminPanel.String()),
+	})
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackAdminPlans(callback *tgbotapi.CallbackQuery) {
+	if !s.isAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав администратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	text := "📋 Управление тарифами\n\nВыберите действие:"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("📋 Показать тарифы", "show_all_plans")},
+		{tgbotapi.NewInlineKeyboardButtonData("🗑 Архивировать тариф", "archive_plan_list")},
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад к админ панели", CallbackAdminPanel.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackAdminMethods(callback *tgbotapi.CallbackQuery) {
+	if !s.isAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав администратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	text := "💳 Управление способами оплаты\n\nВыберите действие:"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("📋 Показать способы", "show_payment_methods")},
+		{tgbotapi.NewInlineKeyboardButtonData("🗑 Архивировать способ", "archive_method_list")},
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад к админ панели", CallbackAdminPanel.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackAdminUsers(callback *tgbotapi.CallbackQuery) {
+	if !s.isAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав администратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	text := "👤 Управление пользователями\n\nВыберите действие:"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("🔍 Найти пользователя", "search_users")},
+		{tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "user_stats")},
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад к админ панели", CallbackAdminPanel.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
 }

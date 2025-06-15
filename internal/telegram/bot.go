@@ -136,6 +136,41 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 	slog.Info("Processing callback", "data", data, "user_id", callback.From.ID)
 
+	// Обработка основного меню
+	switch data {
+	case CallbackShowPlans.String():
+		s.handleCallbackPlans(callback)
+		return
+	case CallbackShowBuy.String():
+		s.handleCallbackBuy(callback)
+		return
+	case CallbackShowKeys.String():
+		s.handleCallbackKeys(callback)
+		return
+	case CallbackShowRef.String():
+		s.handleCallbackRef(callback)
+		return
+	case CallbackShowSupport.String():
+		s.handleCallbackSupport(callback)
+		return
+	case CallbackShowFeedback.String():
+		s.handleCallbackFeedback(callback)
+		return
+	case CallbackShowHelp.String():
+		s.handleCallbackHelp(callback)
+		return
+	case CallbackMainMenu.String():
+		s.answerCallback(callback.ID, "")
+		s.showMainMenu(callback.Message.Chat.ID, callback.From.ID)
+		return
+	case CallbackAdminPanel.String():
+		s.handleCallbackAdminPanel(callback)
+		return
+	case CallbackSuperPanel.String():
+		s.handleCallbackSuperPanel(callback)
+		return
+	}
+
 	if strings.HasPrefix(data, CallbackBuyPlan.String()) ||
 		strings.HasPrefix(data, CallbackBuyPlatform.String()) ||
 		strings.HasPrefix(data, CallbackBuyQty.String()) ||
@@ -153,6 +188,10 @@ func (s *Service) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 		data == CallbackAdminAdd.String() ||
 		data == CallbackAdminDisable.String() ||
 		data == CallbackAdminCashier.String() ||
+		data == "admin_payqueue" ||
+		data == "admin_plans" ||
+		data == "admin_methods" ||
+		data == "admin_users" ||
 		strings.HasPrefix(data, CallbackPaymentApprove.String()) ||
 		strings.HasPrefix(data, CallbackPaymentReject.String()) ||
 		strings.HasPrefix(data, CallbackInfoUser.String()) ||
@@ -315,12 +354,7 @@ func (s *Service) handleStart(msg *tgbotapi.Message) {
 		s.repo.DB().Save(user)
 	}
 
-	text := `Добро пожаловать в Lime VPN! 🍋
-
-Доступные команды:
-/plans - посмотреть тарифы
-/help - справка`
-	s.reply(msg.Chat.ID, text)
+	s.showMainMenu(msg.Chat.ID, msg.From.ID)
 }
 
 func (s *Service) handleHelp(msg *tgbotapi.Message) {
@@ -551,4 +585,232 @@ func (s *Service) setCommands() error {
 	config := tgbotapi.NewSetMyCommands(commands...)
 	_, err := s.bot.Request(config)
 	return err
+}
+
+func (s *Service) showMainMenu(chatID int64, userID int64) {
+	text := "🍋 Добро пожаловать в Lime VPN!\n\nВыберите нужное действие:"
+
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	// Кнопки для обычных пользователей
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("📋 Тарифы", CallbackShowPlans.String()),
+		tgbotapi.NewInlineKeyboardButtonData("💳 Купить", CallbackShowBuy.String()),
+	})
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("🔑 Мои ключи", CallbackShowKeys.String()),
+		tgbotapi.NewInlineKeyboardButtonData("👥 Реферал", CallbackShowRef.String()),
+	})
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("🎧 Поддержка", CallbackShowSupport.String()),
+		tgbotapi.NewInlineKeyboardButtonData("💬 Отзыв", CallbackShowFeedback.String()),
+	})
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("❓ Справка", CallbackShowHelp.String()),
+	})
+
+	// Кнопки для админов
+	if s.isAdmin(userID) {
+		keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("⚡ Админ панель", CallbackAdminPanel.String()),
+		})
+	}
+
+	// Кнопки для суперадминов
+	if s.isSuperAdmin(userID) {
+		keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("👑 Суперадмин", CallbackSuperPanel.String()),
+		})
+	}
+
+	msgConfig := tgbotapi.NewMessage(chatID, text)
+	msgConfig.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(keyboard...)
+	s.bot.Send(msgConfig)
+}
+
+func (s *Service) handleCallbackPlans(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	var plans []db.Plan
+	result := s.repo.DB().Where("archived = false").Find(&plans)
+	if result.Error != nil {
+		s.editMessageText(callback.Message.Chat.ID, callback.Message.MessageID, "Ошибка получения тарифов")
+		return
+	}
+
+	if len(plans) == 0 {
+		s.editMessageText(callback.Message.Chat.ID, callback.Message.MessageID, "Тарифы пока не добавлены")
+		return
+	}
+
+	text := "📋 Доступные тарифы:\n\n"
+	for _, plan := range plans {
+		text += fmt.Sprintf("🔹 %s\n💰 %d руб.\n⏱ %d дней\n\n", plan.Name, plan.PriceInt, plan.DurationDays)
+	}
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackBuy(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	// Перенаправляем к существующему обработчику покупки
+	msg := &tgbotapi.Message{
+		Chat: &tgbotapi.Chat{ID: callback.Message.Chat.ID},
+		From: callback.From,
+	}
+	s.handleBuy(msg)
+}
+
+func (s *Service) handleCallbackKeys(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	// Перенаправляем к существующему обработчику ключей
+	msg := &tgbotapi.Message{
+		Chat: &tgbotapi.Chat{ID: callback.Message.Chat.ID},
+		From: callback.From,
+	}
+	s.handleMyKeys(msg)
+}
+
+func (s *Service) handleCallbackRef(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	// Перенаправляем к существующему обработчику реферралов
+	msg := &tgbotapi.Message{
+		Chat: &tgbotapi.Chat{ID: callback.Message.Chat.ID},
+		From: callback.From,
+	}
+	s.handleRef(msg)
+}
+
+func (s *Service) handleCallbackSupport(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	var admins []db.Admin
+	result := s.repo.DB().Where("role = ? AND disabled = false", RoleSupport.String()).Find(&admins)
+	if result.Error != nil || len(admins) == 0 {
+		text := "Служба поддержки временно недоступна. Попробуйте позже."
+		keyboard := [][]tgbotapi.InlineKeyboardButton{
+			{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+		}
+		s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+		return
+	}
+
+	text := "🎧 Служба поддержки Lime VPN\n\nНапишите одному из наших специалистов:\n\n"
+	for _, admin := range admins {
+		var user db.User
+		if err := s.repo.DB().First(&user, "tg_id = ?", admin.TgID).Error; err == nil && user.Username != "" {
+			text += fmt.Sprintf("• @%s\n", user.Username)
+		}
+	}
+	text += "\nОни помогут решить любые вопросы по использованию VPN!"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackFeedback(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	text := "💬 Отправить отзыв\n\nНапишите свой отзыв о работе VPN, и мы его обязательно прочитаем!\n\nПросто отправьте сообщение в чат."
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackHelp(callback *tgbotapi.CallbackQuery) {
+	s.answerCallback(callback.ID, "")
+
+	text := `🍋 Lime VPN - Быстрый и надежный VPN
+
+👤 Доступные функции:
+• Просмотр тарифов и покупка подписки
+• Управление ключами доступа
+• Реферальная система
+• Служба поддержки
+• Отправка отзывов
+
+🔧 Как пользоваться:
+1. Выберите "Тарифы" для просмотра доступных планов
+2. Нажмите "Купить" для оформления подписки
+3. В "Мои ключи" найдете все ваши активные подписки
+4. Используйте "Реферал" для получения бонусов
+
+❓ Нужна помощь? Обращайтесь в поддержку!`
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackAdminPanel(callback *tgbotapi.CallbackQuery) {
+	if !s.isAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав администратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	text := "⚡ Панель администратора\n\nВыберите действие:"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{
+			tgbotapi.NewInlineKeyboardButtonData("💰 Очередь платежей", "admin_payqueue"),
+			tgbotapi.NewInlineKeyboardButtonData("📋 Управление тарифами", "admin_plans"),
+		},
+		{
+			tgbotapi.NewInlineKeyboardButtonData("💳 Способы оплаты", "admin_methods"),
+			tgbotapi.NewInlineKeyboardButtonData("👤 Управление пользователями", "admin_users"),
+		},
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) handleCallbackSuperPanel(callback *tgbotapi.CallbackQuery) {
+	if !s.isSuperAdmin(callback.From.ID) {
+		s.answerCallback(callback.ID, "У вас нет прав суперадминистратора")
+		return
+	}
+
+	s.answerCallback(callback.ID, "")
+
+	text := "👑 Панель суперадминистратора\n\nВыберите действие:"
+
+	keyboard := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("👥 Управление админами", CallbackAdminList.String())},
+		{tgbotapi.NewInlineKeyboardButtonData("➕ Добавить админа", CallbackAdminAdd.String())},
+		{tgbotapi.NewInlineKeyboardButtonData("🔙 Назад в меню", CallbackMainMenu.String())},
+	}
+
+	s.editMessageTextWithKeyboard(callback.Message.Chat.ID, callback.Message.MessageID, text, keyboard)
+}
+
+func (s *Service) editMessageText(chatID int64, messageID int, text string) {
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	s.bot.Send(editMsg)
+}
+
+func (s *Service) editMessageTextWithKeyboard(chatID int64, messageID int, text string, keyboard [][]tgbotapi.InlineKeyboardButton) {
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ReplyMarkup = &tgbotapi.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	s.bot.Send(editMsg)
 }

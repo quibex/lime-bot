@@ -138,7 +138,7 @@ func (s *Service) handleStartWithRef(msg *tgbotapi.Message) {
 
 	args := msg.CommandArguments()
 	if !startsWith(args, "ref_") {
-		s.handleStart(msg)
+		s.showMainMenu(msg.Chat.ID, msg.From.ID)
 		return
 	}
 
@@ -147,21 +147,19 @@ func (s *Service) handleStartWithRef(msg *tgbotapi.Message) {
 	var inviter db.User
 	result := s.repo.DB().Where("ref_code = ?", refCode).First(&inviter)
 	if result.Error != nil {
-
-		s.handleStart(msg)
+		s.showMainMenu(msg.Chat.ID, msg.From.ID)
 		return
 	}
 
 	if inviter.TgID == msg.From.ID {
-		s.handleStart(msg)
+		s.showMainMenu(msg.Chat.ID, msg.From.ID)
 		return
 	}
 
 	var existingReferral db.Referral
 	result = s.repo.DB().Where("inviter_id = ? AND invitee_id = ?", inviter.TgID, user.TgID).First(&existingReferral)
 	if result.Error == nil {
-
-		s.handleStart(msg)
+		s.showMainMenu(msg.Chat.ID, msg.From.ID)
 		return
 	}
 
@@ -171,16 +169,14 @@ func (s *Service) handleStartWithRef(msg *tgbotapi.Message) {
 	}
 	s.repo.DB().Create(referral)
 
-	text := fmt.Sprintf(`Добро пожаловать в Lime VPN! 🍋
+	// Отправляем приветственное сообщение с информацией о реферале
+	welcomeText := fmt.Sprintf("Добро пожаловать в Lime VPN! 🍋\n\nВы перешли по реферальной ссылке от @%s", inviter.Username)
+	s.reply(msg.Chat.ID, welcomeText)
 
-Вы перешли по реферальной ссылке от @%s
+	// Показываем главное меню
+	s.showMainMenu(msg.Chat.ID, msg.From.ID)
 
-Доступные команды:
-/plans - посмотреть тарифы
-/help - справка`, inviter.Username)
-
-	s.reply(msg.Chat.ID, text)
-
+	// Уведомляем пригласившего
 	notifyText := fmt.Sprintf("🎉 По вашей реферальной ссылке зарегистрировался @%s!", user.Username)
 	s.reply(inviter.TgID, notifyText)
 }

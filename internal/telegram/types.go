@@ -214,6 +214,16 @@ const (
 	CallbackAdminAdd     CallbackData = "admin_add"
 	CallbackAdminDisable CallbackData = "admin_disable"
 	CallbackAdminCashier CallbackData = "admin_cashier"
+	CallbackShowPlans    CallbackData = "show_plans"
+	CallbackShowBuy      CallbackData = "show_buy"
+	CallbackShowKeys     CallbackData = "show_keys"
+	CallbackShowRef      CallbackData = "show_ref"
+	CallbackShowSupport  CallbackData = "show_support"
+	CallbackShowFeedback CallbackData = "show_feedback"
+	CallbackShowHelp     CallbackData = "show_help"
+	CallbackMainMenu     CallbackData = "main_menu"
+	CallbackAdminPanel   CallbackData = "admin_panel"
+	CallbackSuperPanel   CallbackData = "super_panel"
 )
 
 func (c CallbackData) String() string {
