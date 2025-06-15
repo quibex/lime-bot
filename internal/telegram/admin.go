@@ -579,7 +579,13 @@ func (s *Service) rejectPayment(paymentID uint, adminID int64) error {
 		return ErrDatabasef("Failed to commit rejection transaction for payment #%v: %v", paymentID, commitErr)
 	}
 
-	slog.Info("Payment rejection completed", "payment_id", paymentID, "admin_id", adminID)
+	// Уведомляем пользователя об отклонении
+	if len(subscriptions) > 0 {
+		userMsg := fmt.Sprintf("❌ Ваш платеж #%d отклонен кассиром.\n\n🔴 Все связанные подписки отключены.\n💬 Обратитесь в поддержку для уточнения причин.", paymentID)
+		s.reply(payment.UserID, userMsg)
+	}
+
+	slog.Info("Payment rejection completed", "payment_id", paymentID, "admin_id", adminID, "disabled_subscriptions", len(subscriptions))
 	return nil
 }
 
@@ -707,18 +713,53 @@ func (s *Service) disableAdmin(adminID int64) error {
 }
 
 func (s *Service) setCashierRole(adminID int64) error {
-	result := s.repo.DB().Model(&db.Admin{}).
-		Where("tg_id = ?", adminID).
-		Update("role", RoleCashier.String())
+	slog.Info("Setting cashier role", "admin_id", adminID)
 
+	tx := s.repo.DB().Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Сначала снимаем роль кассира у всех
+	result := tx.Model(&db.Admin{}).Where("role = ?", RoleCashier.String()).Update("role", RoleAdmin.String())
 	if result.Error != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to remove cashier role from others: %v", result.Error)
+	}
+
+	slog.Info("Removed cashier role from others", "affected_rows", result.RowsAffected)
+
+	// Проверяем что пользователь является админом
+	var admin db.Admin
+	result = tx.Where("tg_id = ? AND disabled = false", adminID).First(&admin)
+	if result.Error != nil {
+		tx.Rollback()
+		return fmt.Errorf("администратор не найден или отключен")
+	}
+
+	// Назначаем нового кассира
+	result = tx.Model(&admin).Update("role", RoleCashier.String())
+	if result.Error != nil {
+		tx.Rollback()
 		return result.Error
 	}
 
 	if result.RowsAffected == 0 {
+		tx.Rollback()
 		return fmt.Errorf("администратор не найден")
 	}
 
+	commitErr := tx.Commit().Error
+	if commitErr != nil {
+		return fmt.Errorf("failed to commit cashier role change: %v", commitErr)
+	}
+
+	slog.Info("Cashier role set successfully", "admin_id", adminID)
 	return nil
 }
 

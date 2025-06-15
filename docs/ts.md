@@ -368,7 +368,7 @@ TG_CHAT_ID=123456789
 
 ```dockerfile
 # Dockerfile для lime-bot
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

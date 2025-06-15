@@ -551,56 +551,56 @@ func (s *Service) sendPaymentInstructions(chatID int64, payment *db.Payment, met
 }
 
 func (s *Service) handleReceiptMessage(msg *tgbotapi.Message) {
-	state, ok := buyStates[msg.From.ID]
-	if !ok || state.Step != BuyStepReceipt {
-		return
+	// Проверить только наличие pending платежа, а не состояние buyStates
+	var payment db.Payment
+	result := s.repo.DB().Where("user_id = ? AND status = ?", msg.From.ID, PaymentStatusPending).
+		Preload("Plan").Preload("User").First(&payment)
+
+	if result.Error != nil {
+		return // Нет pending платежа
 	}
 
+	// Получить FileID чека
 	var fileID string
 	if msg.Photo != nil && len(msg.Photo) > 0 {
 		fileID = msg.Photo[len(msg.Photo)-1].FileID
 	} else if msg.Document != nil {
 		fileID = msg.Document.FileID
 	} else {
-		s.reply(msg.Chat.ID, "Отправьте скриншот или PDF чек")
 		return
 	}
 
+	// Начинаем транзакцию
 	tx := s.repo.DB().Begin()
 	if tx.Error != nil {
 		s.reply(msg.Chat.ID, "Ошибка БД")
 		return
 	}
 
-	var payment db.Payment
-	if err := tx.First(&payment, state.PaymentID).Error; err != nil {
-		tx.Rollback()
-		s.reply(msg.Chat.ID, "Платеж не найден")
-		return
-	}
-
+	// Сохранить чек в БД
 	payment.ReceiptFileID = fileID
 	if err := tx.Save(&payment).Error; err != nil {
 		tx.Rollback()
+		s.logAndReportError("Failed to save receipt", err, map[string]interface{}{
+			"payment_id": payment.ID,
+			"user_id":    msg.From.ID,
+		})
 		s.reply(msg.Chat.ID, "Ошибка сохранения чека")
 		return
 	}
 
-	var plan db.Plan
-	if err := tx.First(&plan, state.PlanID).Error; err != nil {
-		tx.Rollback()
-		s.reply(msg.Chat.ID, "Ошибка получения тарифа")
-		return
-	}
+	// СРАЗУ создаем подписки и выдаем ключи
+	slog.Info("Creating subscriptions immediately after receipt", "payment_id", payment.ID, "qty", payment.Qty)
 
-	for i := 0; i < state.Qty; i++ {
-		sub, cfg, qr, err := s.createSubscription(tx, state, &plan, payment.ID)
+	for i := 0; i < payment.Qty; i++ {
+		subscription, err := s.createSubscriptionForPayment(tx, &payment)
 		if err != nil {
 			tx.Rollback()
 			s.handleError(msg.Chat.ID, err)
 			return
 		}
-		s.sendSubscriptionToUserWithData(msg.Chat.ID, sub, cfg, qr)
+		// Отправляем ключи пользователю
+		s.sendSubscriptionToUser(msg.Chat.ID, subscription)
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -608,8 +608,43 @@ func (s *Service) handleReceiptMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	delete(buyStates, state.UserID)
-	s.reply(msg.Chat.ID, "✅ Чек получен. Ваши ключи выше")
+	s.reply(msg.Chat.ID, "✅ Чек получен! Ваши ключи выше. Ожидайте подтверждения кассира.")
+
+	// Уведомить кассиров о новом чеке для проверки
+	s.notifyCashiersAboutReceipt(&payment)
+}
+
+func (s *Service) notifyCashiersAboutReceipt(payment *db.Payment) {
+	slog.Info("Notifying cashiers about new receipt", "payment_id", payment.ID, "user_id", payment.UserID)
+
+	// Найти всех кассиров
+	var cashiers []db.Admin
+	s.repo.DB().Where("role = ? AND disabled = false", RoleCashier.String()).Find(&cashiers)
+
+	// Если нет кассиров, уведомить всех админов
+	if len(cashiers) == 0 {
+		slog.Info("No cashiers found, notifying all admins", "payment_id", payment.ID)
+		s.repo.DB().Where("role IN (?, ?) AND disabled = false", RoleAdmin.String(), RoleSuper.String()).Find(&cashiers)
+	}
+
+	if len(cashiers) == 0 {
+		slog.Warn("No admins found to notify about receipt", "payment_id", payment.ID)
+		return
+	}
+
+	text := fmt.Sprintf(`💳 Новый чек для проверки!
+
+📋 Заказ #%d  
+👤 Пользователь: @%s
+💰 Сумма: %d руб.
+📦 Тариф: %s
+
+Проверьте в /payqueue`, payment.ID, payment.User.Username, payment.Amount, payment.Plan.Name)
+
+	for _, cashier := range cashiers {
+		slog.Info("Notifying cashier about receipt", "payment_id", payment.ID, "cashier_id", cashier.TgID)
+		s.reply(cashier.TgID, text)
+	}
 }
 
 func (s *Service) generateWireguardConfig(subscription *db.Subscription) string {
