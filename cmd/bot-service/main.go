@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	os.exit(0)
+	os.Exit(0)
 	// Настраиваем структурированное логирование
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level:     slog.LevelInfo,
